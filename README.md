@@ -510,7 +510,7 @@ See [CHANGELOG.md](CHANGELOG.md) for full version history.
 | Repo | Purpose |
 |---|---|
 | [ha-pi-dashboard](https://github.com/johnpernock/ha-pi-dashboard) | Raspberry Pi kiosk display setup for Home Assistant |
-| [ha-lovelace-cards](https://github.com/johnpernock/ha-lovelace-cards) | Custom Lovelace dashboard cards displayed on the kiosk |
+| [ha-custom-cards](https://github.com/johnpernock/ha-custom-cards) | Custom Lovelace dashboard cards displayed on the kiosk |
 | [ha-kiosk-popup-automation](https://github.com/johnpernock/ha-kiosk-popup-automation) | browser_mod popup cards — NWS alerts, doorbell, SEPTA delays |
 | [ha-kiosk-automation](https://github.com/johnpernock/ha-kiosk-automation) | Kiosk display schedule — power off at night, on in morning |
 
