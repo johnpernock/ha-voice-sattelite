@@ -15,6 +15,7 @@
 #    sudo bash voice-setup.sh --update           # pull latest LVA and restart
 #    sudo bash voice-setup.sh --detect           # detect audio devices only
 #    sudo bash voice-setup.sh --status           # show service status and logs
+#    sudo bash voice-setup.sh --list-wake-words  # list available wake word models
 #
 #  Config:
 #    cp voice.conf.example voice.conf
@@ -55,6 +56,11 @@ VOICE_PORT=6053
 #   usb_speaker  — first USB audio output device
 #   (anything else is treated as a literal ALSA device name)
 VOICE_SPEAKER_OUTPUT=""
+
+# LED feedback for ReSpeaker 2-Mic HAT (APA102 LEDs)
+# Only applies when VOICE_HARDWARE=2mic_hat
+# true = enable LED feedback (wake, listening, processing, idle states)
+VOICE_ENABLE_LEDS=true
 
 # Home Assistant details (only needed if auto-discovery fails)
 VOICE_HA_HOST=""
@@ -345,6 +351,196 @@ _install_2mic_driver() {
 }
 
 # =============================================================================
+#  2-Mic HAT LED service — APA102 RGB LEDs via SPI
+# =============================================================================
+_install_led_service() {
+    local LED_SCRIPT="$LVA_DIR/lva_2mic_leds.py"
+    local LED_SERVICE_FILE="/etc/systemd/system/lva-2mic-leds.service"
+
+    log "Installing LED feedback service for 2-Mic HAT..."
+
+    # Install spidev for APA102 SPI communication
+    "$LVA_DIR/.venv/bin/pip" install spidev --quiet 2>/dev/null ||         apt-get install -y python3-spidev --no-install-recommends -qq 2>/dev/null || true
+
+    # Write the LED event handler script
+    cat > "$LED_SCRIPT" << 'LEDEOF'
+#!/usr/bin/env python3
+"""
+lva_2mic_leds.py — LED event handler for ReSpeaker 2-Mic Pi HAT V2.0
+Connects to LVA via --event-uri and drives the 3 APA102 RGB LEDs
+to show wake word, listening, processing, and idle states.
+"""
+
+import asyncio
+import logging
+import struct
+import sys
+import time
+
+_LOG = logging.getLogger(__name__)
+
+# APA102 LED state colors
+COLORS = {
+    "idle":        (0,   0,   0,   0),    # off
+    "detect":      (0,   0, 100,   0),    # dim blue — waiting for wake word
+    "wake":        (0, 255,   0,   0),    # green — wake word heard
+    "listening":   (0,   0, 200,   0),    # blue — streaming audio
+    "processing":  (150, 75,   0,   0),   # amber — waiting for response
+    "speaking":    (0, 100, 100,   0),    # cyan — playing response
+    "error":       (200,  0,   0,   0),   # red — error state
+}
+NUM_LEDS = 3
+SPI_DEV  = 0
+SPI_CS   = 0
+
+class APA102:
+    def __init__(self):
+        try:
+            import spidev
+            self.spi = spidev.SpiDev()
+            self.spi.open(SPI_DEV, SPI_CS)
+            self.spi.max_speed_hz = 1000000
+            self._ok = True
+        except Exception as e:
+            _LOG.warning("SPI/APA102 not available: %s", e)
+            self._ok = False
+
+    def set_all(self, r, g, b, brightness=8):
+        if not self._ok:
+            return
+        # APA102 frame: start frame + LED frames + end frame
+        start  = [0x00] * 4
+        end    = [0xFF] * 4
+        bright = 0xE0 | min(brightness, 31)
+        pixels = [bright, b, g, r] * NUM_LEDS
+        try:
+            self.spi.xfer2(start + pixels + end)
+        except Exception:
+            pass
+
+    def off(self):
+        self.set_all(0, 0, 0, 0)
+
+    def close(self):
+        if self._ok:
+            self.off()
+            self.spi.close()
+
+async def handle_events(leds):
+    """Read LVA events from stdin — one JSON object per line."""
+    import json
+    _LOG.info("LED event handler started")
+    leds.set_all(*COLORS["detect"][:3], brightness=4)
+
+    loop = asyncio.get_event_loop()
+    reader = asyncio.StreamReader()
+    protocol = asyncio.StreamReaderProtocol(reader)
+    await loop.connect_read_pipe(lambda: protocol, sys.stdin)
+
+    while True:
+        try:
+            line = await reader.readline()
+            if not line:
+                break
+            event = json.loads(line.decode().strip())
+            etype = event.get("type", "")
+            _LOG.debug("Event: %s", etype)
+
+            if etype == "detection":
+                leds.set_all(*COLORS["wake"][:3], brightness=20)
+            elif etype == "streaming-start":
+                leds.set_all(*COLORS["listening"][:3], brightness=15)
+            elif etype == "stt-start":
+                leds.set_all(*COLORS["listening"][:3], brightness=20)
+            elif etype in ("stt-stop", "synthesize"):
+                leds.set_all(*COLORS["processing"][:3], brightness=10)
+            elif etype == "tts-start":
+                leds.set_all(*COLORS["speaking"][:3], brightness=15)
+            elif etype in ("tts-played", "streaming-stop"):
+                leds.set_all(*COLORS["detect"][:3], brightness=4)
+            elif etype == "error":
+                leds.set_all(*COLORS["error"][:3], brightness=15)
+                await asyncio.sleep(2)
+                leds.set_all(*COLORS["detect"][:3], brightness=4)
+        except json.JSONDecodeError:
+            pass
+        except Exception as e:
+            _LOG.error("Event handler error: %s", e)
+
+def main():
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s [leds] %(message)s",
+                        datefmt="%H:%M:%S")
+    leds = APA102()
+    try:
+        asyncio.run(handle_events(leds))
+    except KeyboardInterrupt:
+        pass
+    finally:
+        leds.close()
+
+if __name__ == "__main__":
+    main()
+LEDEOF
+    chmod +x "$LED_SCRIPT"
+    chown "$VOICE_USER:$VOICE_USER" "$LED_SCRIPT"
+
+    # Write LED systemd service — reads events piped from LVA via --event-uri
+    # LVA connects to this service on tcp://127.0.0.1:10500 and sends JSON events
+    local LED_PORT=10500
+
+    # Create a simple TCP→stdin bridge so LVA can send events to the script
+    local LED_BRIDGE="/usr/local/bin/lva-led-bridge.sh"
+    cat > "$LED_BRIDGE" << BRIDGEOF
+#!/bin/bash
+# Bridge: listen on TCP port $LED_PORT, pipe events to the LED Python script
+exec socat TCP-LISTEN:${LED_PORT},fork,reuseaddr - |     ${LVA_DIR}/.venv/bin/python3 ${LED_SCRIPT}
+BRIDGEOF
+    chmod +x "$LED_BRIDGE"
+
+    # Install socat for the TCP bridge
+    apt-get install -y socat --no-install-recommends -qq 2>/dev/null || true
+
+    cat > "$LED_SERVICE_FILE" << LEDSVCEOF
+[Unit]
+Description=LVA 2-Mic HAT LED Feedback
+After=${SERVICE_NAME}.service
+BindsTo=${SERVICE_NAME}.service
+
+[Service]
+Type=simple
+User=${VOICE_USER}
+ExecStart=${LED_BRIDGE}
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+LEDSVCEOF
+
+    systemctl daemon-reload
+    systemctl enable lva-2mic-leds.service
+    systemctl restart lva-2mic-leds.service 2>/dev/null || true
+
+    # Update LVA service to pass --event-uri
+    if ! grep -q "event-uri" "$SERVICE_FILE"; then
+        sed -i "s|--wake-model.*|--wake-model "\${LVA_WAKE_WORD}" \\\n    --event-uri 'tcp://127.0.0.1:${LED_PORT}'|" "$SERVICE_FILE"
+        systemctl daemon-reload
+        systemctl restart "$SERVICE_NAME" 2>/dev/null || true
+    fi
+
+    info "LED service installed — 3 APA102 LEDs will show satellite state"
+    log "  Off/dim blue  = idle/waiting"
+    log "  Green flash   = wake word detected"
+    log "  Blue          = listening"
+    log "  Amber         = processing"
+    log "  Cyan          = speaking response"
+    log "  Red           = error"
+}
+
+# =============================================================================
 #  --detect — show audio devices
 # =============================================================================
 if [[ "$1" == "--detect" ]]; then
@@ -364,6 +560,67 @@ if [[ "$1" == "--detect" ]]; then
     echo "  Set VOICE_HARDWARE=custom in voice.conf and specify:"
     echo "    VOICE_MIC_DEVICE=\"plughw:X,0\"     # from arecord -l, card X"
     echo "    VOICE_SPEAKER_DEVICE=\"plughw:X,0\" # from aplay -l, card X"
+    exit 0
+fi
+
+# =============================================================================
+#  --list-wake-words — list available wake word models
+# =============================================================================
+if [[ "$1" == "--list-wake-words" ]]; then
+    hr; banner "  Available Wake Word Models"; hr; echo ""
+
+    LVA_WAKEWORDS_DIR="$LVA_DIR/wakewords"
+    LVA_DOWNLOAD_DIR="$LVA_DIR/local"
+
+    if [[ ! -d "$LVA_DIR" ]]; then
+        err "LVA not installed yet. Run a full install first, then --list-wake-words."
+    fi
+
+    echo "  Built-in models (shipped with LVA):"
+    echo ""
+    if [[ -d "$LVA_WAKEWORDS_DIR" ]]; then
+        found=false
+        while IFS= read -r -d '' f; do
+            name=$(basename "$f" .tflite)
+            echo "    $name"
+            found=true
+        done < <(find "$LVA_WAKEWORDS_DIR" -name "*.tflite" -print0 2>/dev/null)
+        $found || echo "    (none found in $LVA_WAKEWORDS_DIR)"
+    else
+        echo "    (wakewords directory not found: $LVA_WAKEWORDS_DIR)"
+    fi
+
+    echo ""
+    echo "  Downloaded/custom models:"
+    echo ""
+    if [[ -d "$LVA_DOWNLOAD_DIR" ]]; then
+        found=false
+        while IFS= read -r -d '' f; do
+            name=$(basename "$f" .tflite)
+            echo "    $name   ($(dirname "$f"))"
+            found=true
+        done < <(find "$LVA_DOWNLOAD_DIR" -name "*.tflite" -print0 2>/dev/null)
+        $found || echo "    (none — place custom .tflite files in $LVA_DOWNLOAD_DIR)"
+    else
+        echo "    (none)"
+    fi
+
+    echo ""
+    echo "  Current active wake word:"
+    if [[ -f "/etc/${SERVICE_NAME}.env" ]]; then
+        grep "LVA_WAKE_WORD" "/etc/${SERVICE_NAME}.env" | sed 's/LVA_WAKE_WORD=/    /'
+    else
+        echo "    (not installed — set VOICE_WAKE_WORD in voice.conf)"
+    fi
+
+    echo ""
+    echo "  To change wake word: edit voice.conf and run --reset"
+    echo "    VOICE_WAKE_WORD="hey_jarvis""
+    echo ""
+    echo "  Community wake words: https://github.com/fwartner/home-assistant-wakewords-collection"
+    echo "  Place .tflite files in: $LVA_DOWNLOAD_DIR"
+    echo "  Then set: VOICE_WAKE_WORD="your_model_name" (without .tflite)"
+    echo ""
     exit 0
 fi
 
@@ -664,6 +921,9 @@ fi
 # ── Step 8: Create systemd service ────────────────────────────────────────────
 hr; banner "  Step 6/7 — systemd service"; hr; echo ""
 
+# Resolve user UID for service environment variables
+VOICE_UID=$(id -u "$VOICE_USER" 2>/dev/null || echo "1000")
+
 # Build environment file
 ENV_FILE="/etc/${SERVICE_NAME}.env"
 cat > "$ENV_FILE" << ENVEOF
@@ -679,11 +939,38 @@ ENVEOF
 chmod 640 "$ENV_FILE"
 chown root:"$VOICE_USER" "$ENV_FILE"
 
+# Write a helper that waits for the PipeWire/PulseAudio user socket before
+# starting LVA — without this the service can fail at boot because the
+# audio session isn't ready yet even though the system is "up"
+AUDIO_WAIT_SCRIPT="/usr/local/bin/lva-audio-wait.sh"
+cat > "$AUDIO_WAIT_SCRIPT" << 'WAITEOF'
+#!/bin/bash
+# Wait for PipeWire or PulseAudio user socket to be ready
+USER_ID=$(id -u "$1" 2>/dev/null || echo "1000")
+RUNTIME_DIR="/run/user/${USER_ID}"
+PULSE_SOCK="${RUNTIME_DIR}/pulse/native"
+PIPEWIRE_SOCK="${RUNTIME_DIR}/pipewire-0"
+MAX_WAIT=30
+WAITED=0
+while [[ $WAITED -lt $MAX_WAIT ]]; do
+    # Accept either PipeWire or PulseAudio socket
+    if [[ -S "$PIPEWIRE_SOCK" ]] || [[ -S "$PULSE_SOCK" ]]; then
+        echo "[lva-audio-wait] Audio socket ready after ${WAITED}s"
+        exit 0
+    fi
+    sleep 1
+    WAITED=$((WAITED + 1))
+done
+echo "[lva-audio-wait] Warning: audio socket not found after ${MAX_WAIT}s — starting anyway"
+exit 0
+WAITEOF
+chmod +x "$AUDIO_WAIT_SCRIPT"
+
 # Build service file
 cat > "$SERVICE_FILE" << SVCEOF
 [Unit]
 Description=Linux Voice Assistant — ${VOICE_SATELLITE_NAME}
-After=network-online.target sound.target avahi-daemon.service
+After=network-online.target sound.target avahi-daemon.service graphical-session.target
 Wants=network-online.target avahi-daemon.service
 
 [Service]
@@ -691,6 +978,8 @@ Type=simple
 User=${VOICE_USER}
 WorkingDirectory=${LVA_DIR}
 EnvironmentFile=${ENV_FILE}
+# Wait for PipeWire/PulseAudio user session before starting
+ExecStartPre=${AUDIO_WAIT_SCRIPT} ${VOICE_USER}
 ExecStart=${LVA_DIR}/.venv/bin/python3 -m linux_voice_assistant \\
     --name "\${LVA_NAME}" \\
     --port "\${LVA_PORT}" \\
@@ -698,9 +987,12 @@ ExecStart=${LVA_DIR}/.venv/bin/python3 -m linux_voice_assistant \\
     --audio-output-device "\${LVA_SPK}" \\
     --wake-model "\${LVA_WAKE_WORD}"
 Restart=on-failure
-RestartSec=10
+RestartSec=15
 StandardOutput=journal
 StandardError=journal
+# Ensure PulseAudio environment is set for the user
+Environment=PULSE_RUNTIME_PATH=/run/user/${VOICE_UID}
+Environment=XDG_RUNTIME_DIR=/run/user/${VOICE_UID}
 
 [Install]
 WantedBy=multi-user.target
@@ -720,6 +1012,11 @@ else
 fi
 
 # ── Step 9: Install marker ────────────────────────────────────────────────────
+# ── Step 7b: LED service (2-Mic HAT only) ────────────────────────────────────
+if [[ "$ACTUAL_HW" == "2mic_hat" ]] && [[ "${VOICE_ENABLE_LEDS:-true}" == "true" ]]; then
+    _install_led_service
+fi
+
 hr; banner "  Step 7/7 — Finalizing"; hr; echo ""
 
 cat > "$INSTALL_MARKER" << MARKEREOF
@@ -730,6 +1027,7 @@ SPEAKER=${RESOLVED_SPK}
 WAKE_WORD=${VOICE_WAKE_WORD}
 PORT=${VOICE_PORT}
 LVA_DIR=${LVA_DIR}
+LEDS_ENABLED=${VOICE_ENABLE_LEDS:-true}
 MARKEREOF
 
 info "Install marker → $INSTALL_MARKER"
@@ -768,6 +1066,7 @@ hr
 echo ""
 echo "  Check status    : sudo bash $0 --status"
 echo "  Detect devices  : sudo bash $0 --detect"
+echo "  List wake words : sudo bash $0 --list-wake-words"
 echo "  Update LVA      : sudo bash $0 --update"
 echo "  Reset LVA       : sudo bash $0 --reset"
 echo "  Factory reset   : sudo bash $0 --factory-reset   (LVA + HAT driver)"

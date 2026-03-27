@@ -4,6 +4,24 @@ All notable changes to this project are documented here.
 
 ---
 
+## [1.2.0] — 2026-03-27
+
+### Added
+
+- **PulseAudio/PipeWire socket wait** — `lva-audio-wait.sh` is installed to `/usr/local/bin/` and wired as `ExecStartPre` in the systemd service. Waits up to 30 seconds for the user audio session socket (`/run/user/UID/pipewire-0` or `pulse/native`) to be ready before starting LVA. Prevents `Connection refused` errors at boot when the service starts before the audio session is up. Accepts either PipeWire or PulseAudio socket.
+- **`--list-wake-words` flag** — lists all available wake word models from the LVA `wakewords/` directory and any custom `.tflite` files in the `local/` download directory. Shows the currently active model and links to the community wake words collection.
+- **LED feedback for ReSpeaker 2-Mic HAT V2.0** — when `VOICE_HARDWARE=2mic_hat` and `VOICE_ENABLE_LEDS=true` (default), installs `lva_2mic_leds.py` and a TCP bridge service (`lva-2mic-leds.service`). The 3 APA102 RGB LEDs change color based on satellite state via LVA's `--event-uri` event hook:
+  - Dim blue — idle / waiting for wake word
+  - Green — wake word detected
+  - Blue — listening / streaming audio
+  - Amber — processing / waiting for response
+  - Cyan — playing TTS response
+  - Red — error (2s, then returns to idle)
+- **`VOICE_ENABLE_LEDS`** config option in `voice.conf` — set `false` to skip LED install on 2-Mic HAT.
+- **`XDG_RUNTIME_DIR` and `PULSE_RUNTIME_PATH`** properly set in service environment using resolved UID.
+
+---
+
 ## [1.1.0] — 2026-03-27
 
 ### Added

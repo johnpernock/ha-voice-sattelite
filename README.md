@@ -176,6 +176,21 @@ The script detects the HAT is now present and completes the LVA install.
 
 > This is a one-time process. Future `--update` and `--reset` runs do not repeat the driver install.
 
+### LED feedback
+
+The 2-Mic HAT has 3 APA102 RGB LEDs. When `VOICE_ENABLE_LEDS=true` (default), the install automatically sets up LED feedback:
+
+| Color | State |
+|---|---|
+| Dim blue | Idle — waiting for wake word |
+| Green | Wake word detected |
+| Blue | Listening / streaming audio to HA |
+| Amber | Processing — waiting for response |
+| Cyan | Playing TTS response |
+| Red | Error (clears after 2 seconds) |
+
+To disable: set `VOICE_ENABLE_LEDS=false` in `voice.conf` and run `--reset`.
+
 **Verify the HAT is detected:**
 ```bash
 aplay -l    # should show seeed2micvoicec
@@ -214,6 +229,7 @@ sudo bash voice-setup.sh --factory-reset    # wipe LVA + remove HAT driver
 sudo bash voice-setup.sh --remove-hat       # remove 2-Mic HAT driver only
 sudo bash voice-setup.sh --update           # pull latest LVA, restart service
 sudo bash voice-setup.sh --detect           # list all audio devices
+sudo bash voice-setup.sh --list-wake-words  # list available wake word models
 sudo bash voice-setup.sh --status           # service status + recent logs
 ```
 
@@ -242,6 +258,18 @@ Wipes the LVA service, Python venv, and install marker, then re-runs the install
 ```bash
 sudo bash voice-setup.sh --reset
 ```
+
+### --list-wake-words
+
+Lists all wake word models available in the LVA installation — both built-in models and any custom `.tflite` files you've added. Shows the currently active model and links to the community wake words collection.
+
+```bash
+sudo bash voice-setup.sh --list-wake-words
+```
+
+To use a custom wake word, download a `.tflite` file from the [community collection](https://github.com/fwartner/home-assistant-wakewords-collection), place it in `~/linux-voice-assistant/local/`, then set `VOICE_WAKE_WORD="model_name"` in `voice.conf` and run `--reset`.
+
+---
 
 ### --detect
 
