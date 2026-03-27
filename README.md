@@ -2,7 +2,7 @@
 
 A one-script installer that turns a Raspberry Pi into a Home Assistant voice satellite using [OHF-Voice/linux-voice-assistant](https://github.com/OHF-Voice/linux-voice-assistant). Connects to HA via the ESPHome protocol — auto-discovered like any ESPHome device, no manual configuration required.
 
-Designed as a companion to [ha-pi-dashboard](https://github.com/johnpernock/ha-pi-dashboard) but completely standalone — can run on its own Pi or alongside the kiosk on the same device.
+Designed as a companion to [ha-pi-smarthome](https://github.com/johnpernock/ha-pi-smarthome) but completely standalone — can run on its own Pi or alongside the kiosk on the same device.
 
 ---
 
@@ -137,7 +137,7 @@ VOICE_SPEAKER_DEVICE="plughw:2,0"
 
 ## Two-Pi setup example
 
-**Pi 1 — kiosk display** (`ha-pi-dashboard`):
+**Pi 1 — kiosk display** (`ha-pi-smarthome`):
 ```bash
 # kiosk.conf
 KIOSK_URL="http://192.168.1.149:8123/dashboard-wall/home"
@@ -509,7 +509,7 @@ See [CHANGELOG.md](CHANGELOG.md) for full version history.
 
 | Repo | Purpose |
 |---|---|
-| [ha-pi-dashboard](https://github.com/johnpernock/ha-pi-dashboard) | Raspberry Pi kiosk display setup for Home Assistant |
+| [ha-pi-smarthome](https://github.com/johnpernock/ha-pi-smarthome) | Raspberry Pi kiosk display setup for Home Assistant |
 | [ha-custom-cards](https://github.com/johnpernock/ha-custom-cards) | Custom Lovelace dashboard cards displayed on the kiosk |
 | [ha-kiosk-popup-automation](https://github.com/johnpernock/ha-kiosk-popup-automation) | browser_mod popup cards — NWS alerts, doorbell, SEPTA delays |
 | [ha-custom-automation](https://github.com/johnpernock/ha-custom-automation) | All Home Assistant automations — lighting, climate, blinds, security, kiosk |
