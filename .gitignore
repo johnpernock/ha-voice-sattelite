@@ -1,0 +1,36 @@
+# Home Assistant / Pi
+*.db
+*.db-shm
+*.db-wal
+.storage/
+secrets.yaml
+known_devices.yaml
+
+# Local config — never commit personal settings
+voice.conf
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Editor
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Logs
+*.log
+
+# Temp
+*.tmp
+*.bak
+tmp/
+temp/

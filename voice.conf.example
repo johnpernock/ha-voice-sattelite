@@ -1,0 +1,59 @@
+# =============================================================================
+#  voice.conf — local configuration for voice-setup.sh
+# =============================================================================
+#
+#  Copy this file to voice.conf and set your values:
+#    cp voice.conf.example voice.conf
+#    nano voice.conf
+#    sudo bash voice-setup.sh
+#
+#  voice.conf is git-ignored — git pull will never overwrite your settings.
+#  Only set the variables you want to override.
+# =============================================================================
+
+# Name shown in Home Assistant's device list
+# VOICE_SATELLITE_NAME="front-door-satellite"
+
+# ── Hardware ──────────────────────────────────────────────────────────────────
+# auto          — script detects what's connected (recommended to start)
+# 2mic_hat      — ReSpeaker 2-Mic Pi HAT V2.0 (GPIO, requires driver install)
+# respeaker_lite — ReSpeaker Lite (USB, plug and play)
+# usb           — any generic USB microphone/speaker
+# custom        — set VOICE_MIC_DEVICE and VOICE_SPEAKER_DEVICE manually
+#
+# VOICE_HARDWARE="auto"
+
+# ── Audio devices (only set these if VOICE_HARDWARE=custom) ───────────────────
+# Find your device names by running: sudo bash voice-setup.sh --detect
+# Use plughw: format for best compatibility, e.g. plughw:CARD=seeed2micvoicec,DEV=0
+#
+# VOICE_MIC_DEVICE=""
+# VOICE_SPEAKER_DEVICE=""
+
+# ── Wake word ─────────────────────────────────────────────────────────────────
+# okay_nabu (default) | hey_jarvis | alexa
+# VOICE_WAKE_WORD="okay_nabu"
+
+# ── Speaker output routing ────────────────────────────────────────────────────
+# By default the speaker uses the same audio card as the microphone.
+# Set this if you want audio to come out of a different device — for example
+# mic on the 2-Mic HAT but sound through HDMI or the Pi headphone jack.
+#
+# Options:
+#   hdmi         — HDMI 1 (default HDMI on Pi 3, vc4hdmi0 on Pi 4/5)
+#   hdmi2        — HDMI 2 (Pi 4 and Pi 5 only)
+#   headphone    — 3.5mm headphone jack
+#   usb_speaker  — first detected USB audio output
+#   (any other value is used as a literal ALSA device name, e.g. plughw:2,0)
+#
+# Examples:
+#   VOICE_SPEAKER_OUTPUT="hdmi"          # mic on HAT, audio through TV/display
+#   VOICE_SPEAKER_OUTPUT="headphone"     # mic on USB, audio through 3.5mm jack
+#   VOICE_SPEAKER_OUTPUT="plughw:2,0"    # explicit card number from aplay -l
+#
+# VOICE_SPEAKER_OUTPUT=""
+
+# ── Satellite name and port ───────────────────────────────────────────────────
+# Port 6053 is the ESPHome default — HA discovers it automatically via mDNS
+# Only change if you have a port conflict
+# VOICE_PORT=6053
