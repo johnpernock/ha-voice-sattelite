@@ -208,11 +208,39 @@ Once added, go to **Settings → Voice Assistants** and assign the satellite to 
 ## CLI Reference
 
 ```bash
-sudo bash voice-setup.sh              # fresh install
-sudo bash voice-setup.sh --reset      # wipe everything and reinstall
-sudo bash voice-setup.sh --update     # pull latest LVA, restart service
-sudo bash voice-setup.sh --detect     # list all audio devices
-sudo bash voice-setup.sh --status     # service status + recent logs
+sudo bash voice-setup.sh                    # fresh install
+sudo bash voice-setup.sh --reset            # wipe LVA and reinstall
+sudo bash voice-setup.sh --factory-reset    # wipe LVA + remove HAT driver
+sudo bash voice-setup.sh --remove-hat       # remove 2-Mic HAT driver only
+sudo bash voice-setup.sh --update           # pull latest LVA, restart service
+sudo bash voice-setup.sh --detect           # list all audio devices
+sudo bash voice-setup.sh --status           # service status + recent logs
+```
+
+### --factory-reset
+
+Stops and removes the LVA service **and** removes the ReSpeaker 2-Mic HAT device tree overlay driver from `/boot/firmware/config.txt` and `/boot/firmware/overlays/`. Asks for confirmation before proceeding, then offers a reboot.
+
+Use this when you want to completely clean a Pi — no voice assistant, no HAT driver — without removing the SD card.
+
+```bash
+sudo bash voice-setup.sh --factory-reset
+```
+
+### --remove-hat
+
+Removes the ReSpeaker 2-Mic HAT driver only, leaving the LVA service untouched. Useful if you're swapping the HAT for a USB mic and want to cleanly remove the old driver first.
+
+```bash
+sudo bash voice-setup.sh --remove-hat
+```
+
+### --reset
+
+Wipes the LVA service, Python venv, and install marker, then re-runs the install. If the 2-Mic HAT driver is present, prompts whether to remove it too (turning it into a factory reset) or keep it (reinstall will detect and use it).
+
+```bash
+sudo bash voice-setup.sh --reset
 ```
 
 ### --detect
@@ -241,7 +269,7 @@ sudo bash voice-setup.sh --update
 
 ### --reset
 
-Stops and removes the systemd service, deletes the Python venv and LVA clone, and removes the install marker. Then re-runs the full install. Use this to change hardware type or fix a broken install.
+Stops and removes the systemd service, deletes the Python venv and LVA clone, and removes the install marker. If the 2-Mic HAT driver is installed, prompts whether to remove it too. Then re-runs the full install.
 
 ```bash
 sudo bash voice-setup.sh --reset
@@ -284,6 +312,31 @@ aplay -l             # list playback devices
 arecord -D plughw:X,0 -f S16_LE -r 16000 -d 3 /tmp/test.wav
 aplay  -D plughw:X,0 /tmp/test.wav
 ```
+
+---
+
+## Remote management (no SD card removal needed)
+
+All reset and cleanup operations can be done over SSH — no need to physically access the Pi or remove the SD card. This is especially useful for wall-mounted or encased satellites.
+
+```bash
+# Wipe LVA and reinstall fresh
+sudo bash ~/ha-voice-sattelite/voice-setup.sh --reset
+
+# Full factory reset — removes LVA and HAT driver, then reboots
+sudo bash ~/ha-voice-sattelite/voice-setup.sh --factory-reset
+
+# Remove HAT driver only (e.g. swapping to USB mic)
+sudo bash ~/ha-voice-sattelite/voice-setup.sh --remove-hat
+
+# Check what's running
+sudo bash ~/ha-voice-sattelite/voice-setup.sh --status
+
+# Update to latest LVA without a full reinstall
+sudo bash ~/ha-voice-sattelite/voice-setup.sh --update
+```
+
+After `--factory-reset` the Pi reboots cleanly with no voice assistant and no HAT driver loaded. Run `sudo bash ~/ha-voice-sattelite/voice-setup.sh` to reinstall from scratch with a different config.
 
 ---
 

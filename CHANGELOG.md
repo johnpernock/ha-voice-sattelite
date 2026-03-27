@@ -4,6 +4,18 @@ All notable changes to this project are documented here.
 
 ---
 
+## [1.1.0] — 2026-03-27
+
+### Added
+
+- **`--factory-reset`** — stops and removes the LVA service, wipes the Python venv and clone, removes the ReSpeaker 2-Mic HAT device tree overlay from `/boot/firmware/config.txt` and `/boot/firmware/overlays/`, then offers a reboot. Full clean slate over SSH — no SD card removal needed.
+- **`--remove-hat`** — removes the 2-Mic HAT driver only, leaving LVA untouched. Use when swapping to a different mic hardware.
+- **Enhanced `--reset`** — detects if the 2-Mic HAT driver is installed and prompts to remove it too (factory reset) or keep it (LVA-only reset).
+- **`_remove_hat_driver()` function** — removes `dtoverlay=respeaker-2mic-v2_0` from config.txt, deletes the `.dtbo` overlay file, and removes the seeed-linux-dtoverlays source directory.
+- **Remote management section in README** — documents all reset/cleanup flows for wall-mounted or encased satellites that can't have their SD cards easily removed.
+
+---
+
 ## [1.0.0] — 2026-03-27
 
 ### Added

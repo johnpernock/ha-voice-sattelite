@@ -8,11 +8,13 @@
 #  Connects to Home Assistant via ESPHome protocol (auto-discovered).
 #
 #  Usage:
-#    sudo bash voice-setup.sh              # fresh install
-#    sudo bash voice-setup.sh --reset      # wipe and reinstall
-#    sudo bash voice-setup.sh --update     # pull latest LVA and restart
-#    sudo bash voice-setup.sh --detect     # detect audio devices only
-#    sudo bash voice-setup.sh --status     # show service status and logs
+#    sudo bash voice-setup.sh                    # fresh install
+#    sudo bash voice-setup.sh --reset            # wipe LVA and reinstall
+#    sudo bash voice-setup.sh --factory-reset    # wipe LVA + remove HAT driver
+#    sudo bash voice-setup.sh --remove-hat       # remove 2-Mic HAT driver only
+#    sudo bash voice-setup.sh --update           # pull latest LVA and restart
+#    sudo bash voice-setup.sh --detect           # detect audio devices only
+#    sudo bash voice-setup.sh --status           # show service status and logs
 #
 #  Config:
 #    cp voice.conf.example voice.conf
@@ -220,6 +222,53 @@ _resolve_devices() {
 }
 
 # =============================================================================
+#  2-Mic HAT V2.0 driver removal
+# =============================================================================
+_remove_hat_driver() {
+    hr; banner "  ReSpeaker 2-Mic HAT V2.0 — Driver Removal"; hr; echo ""
+
+    local REMOVED=false
+
+    # Remove overlay entry from config.txt
+    if grep -q "dtoverlay=respeaker-2mic-v2_0" /boot/firmware/config.txt 2>/dev/null; then
+        sed -i '/dtoverlay=respeaker-2mic-v2_0/d' /boot/firmware/config.txt
+        info "Removed dtoverlay=respeaker-2mic-v2_0 from config.txt"
+        REMOVED=true
+    else
+        log "dtoverlay not found in config.txt — already removed or never installed"
+    fi
+
+    # Remove the .dtbo overlay file
+    if [[ -f /boot/firmware/overlays/respeaker-2mic-v2_0.dtbo ]]; then
+        rm -f /boot/firmware/overlays/respeaker-2mic-v2_0.dtbo
+        info "Removed respeaker-2mic-v2_0.dtbo from overlays"
+        REMOVED=true
+    else
+        log "Overlay file not found — already removed"
+    fi
+
+    # Remove the dtoverlays source directory if present
+    local DT_DIR="$VOICE_HOME/seeed-linux-dtoverlays"
+    if [[ -d "$DT_DIR" ]]; then
+        rm -rf "$DT_DIR"
+        info "Removed $DT_DIR"
+    fi
+
+    # Note: we do NOT remove dtparam=i2c_arm=on or dtparam=spi=on as
+    # other hardware may depend on them. Only the respeaker-specific overlay.
+
+    if $REMOVED; then
+        echo ""
+        warn "A reboot is required to fully unload the driver."
+        echo ""
+        read -r -p "  Reboot now? [Y/n] " ans
+        [[ "${ans,,}" != "n" ]] && reboot
+    else
+        info "Nothing to remove — driver was not installed"
+    fi
+}
+
+# =============================================================================
 #  2-Mic HAT V2.0 driver install (device tree overlay — no kernel compile)
 # =============================================================================
 _install_2mic_driver() {
@@ -319,6 +368,62 @@ if [[ "$1" == "--detect" ]]; then
 fi
 
 # =============================================================================
+#  --remove-hat — remove 2-Mic HAT driver without touching LVA
+# =============================================================================
+if [[ "$1" == "--remove-hat" ]]; then
+    [[ $EUID -ne 0 ]] && err "Must be run as root. Try: sudo bash $0 --remove-hat"
+    _remove_hat_driver
+    exit 0
+fi
+
+# =============================================================================
+#  --factory-reset — stop LVA service AND remove 2-Mic HAT driver
+# =============================================================================
+if [[ "$1" == "--factory-reset" ]]; then
+    hr; banner "  Factory Reset — LVA + HAT Driver"; hr; echo ""
+    echo ""
+    echo "  This will:"
+    echo "    1. Stop and remove the linux-voice-assistant service"
+    echo "    2. Delete the LVA Python venv and clone"
+    echo "    3. Remove the ReSpeaker 2-Mic HAT device tree overlay"
+    echo "    4. Remove all install markers"
+    echo ""
+    read -r -p "  Proceed? [y/N] " ans
+    [[ "${ans,,}" != "y" ]] && echo "Aborted." && exit 0
+
+    # Stop and remove service
+    log "Stopping service..."
+    systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+    systemctl disable "$SERVICE_NAME" 2>/dev/null || true
+    rm -f "$SERVICE_FILE"
+    rm -f "/etc/${SERVICE_NAME}.env"
+    systemctl daemon-reload
+
+    # Remove LVA
+    log "Removing LVA directory..."
+    rm -rf "$LVA_DIR"
+
+    # Remove install markers
+    log "Removing install markers..."
+    rm -f "$INSTALL_MARKER"
+
+    info "LVA removed"
+    echo ""
+
+    # Remove HAT driver
+    _remove_hat_driver
+
+    echo ""
+    info "Factory reset complete."
+    echo ""
+    echo "  The Pi is now clean — no voice assistant, no HAT driver."
+    echo "  To reinstall from scratch:"
+    echo "    sudo bash $0"
+    echo ""
+    exit 0
+fi
+
+# =============================================================================
 #  --status — show service status and recent logs
 # =============================================================================
 if [[ "$1" == "--status" ]]; then
@@ -360,12 +465,40 @@ fi
 if [[ "$1" == "--reset" ]]; then
     hr; banner "  Resetting Voice Assistant Install"; hr; echo ""
 
+    # Check if HAT driver is installed and offer to remove it too
+    HAT_INSTALLED=false
+    grep -q "dtoverlay=respeaker-2mic-v2_0" /boot/firmware/config.txt 2>/dev/null && HAT_INSTALLED=true
+
+    if $HAT_INSTALLED; then
+        echo "  The ReSpeaker 2-Mic HAT driver is currently installed."
+        echo ""
+        echo "  [1] Reset LVA only          (keep HAT driver — reinstall will use it)"
+        echo "  [2] Reset LVA + HAT driver  (full factory reset — requires reboot)"
+        echo ""
+        read -r -p "  Choice [1/2]: " choice
+        if [[ "$choice" == "2" ]]; then
+            log "Stopping service..."
+            systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+            systemctl disable "$SERVICE_NAME" 2>/dev/null || true
+            rm -f "$SERVICE_FILE"
+            rm -f "/etc/${SERVICE_NAME}.env"
+            systemctl daemon-reload
+            rm -rf "$LVA_DIR"
+            rm -f "$INSTALL_MARKER"
+            info "LVA removed"
+            echo ""
+            _remove_hat_driver
+            exit 0
+        fi
+    fi
+
     log "Stopping service..."
     systemctl stop "$SERVICE_NAME" 2>/dev/null || true
     systemctl disable "$SERVICE_NAME" 2>/dev/null || true
 
     log "Removing service file..."
     rm -f "$SERVICE_FILE"
+    rm -f "/etc/${SERVICE_NAME}.env"
     systemctl daemon-reload
 
     log "Removing LVA directory..."
@@ -636,7 +769,9 @@ echo ""
 echo "  Check status    : sudo bash $0 --status"
 echo "  Detect devices  : sudo bash $0 --detect"
 echo "  Update LVA      : sudo bash $0 --update"
-echo "  Reset install   : sudo bash $0 --reset"
+echo "  Reset LVA       : sudo bash $0 --reset"
+echo "  Factory reset   : sudo bash $0 --factory-reset   (LVA + HAT driver)"
+echo "  Remove HAT only : sudo bash $0 --remove-hat"
 echo "  Service logs    : sudo journalctl -u $SERVICE_NAME -f"
 echo "  Restart service : sudo systemctl restart $SERVICE_NAME"
 echo ""
