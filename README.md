@@ -511,7 +511,6 @@ See [CHANGELOG.md](CHANGELOG.md) for full version history.
 |---|---|
 | [ha-pi-smarthome](https://github.com/johnpernock/ha-pi-smarthome) | Raspberry Pi kiosk display setup for Home Assistant |
 | [ha-custom-cards](https://github.com/johnpernock/ha-custom-cards) | Custom Lovelace dashboard cards displayed on the kiosk |
-| [ha-kiosk-popup-automation](https://github.com/johnpernock/ha-kiosk-popup-automation) | browser_mod popup cards — NWS alerts, doorbell, SEPTA delays |
 | [ha-custom-automation](https://github.com/johnpernock/ha-custom-automation) | All Home Assistant automations — lighting, climate, blinds, security, kiosk |
 
 ---
