@@ -524,11 +524,16 @@ LEDSVCEOF
     systemctl enable lva-2mic-leds.service
     systemctl restart lva-2mic-leds.service 2>/dev/null || true
 
-    # Update LVA service to pass --event-uri
+    # Update LVA service to pass --event-uri (only if this LVA version supports it)
     if ! grep -q "event-uri" "$SERVICE_FILE"; then
-        sed -i "s|--wake-model.*|--wake-model "\${LVA_WAKE_WORD}" \\\n    --event-uri 'tcp://127.0.0.1:${LED_PORT}'|" "$SERVICE_FILE"
-        systemctl daemon-reload
-        systemctl restart "$SERVICE_NAME" 2>/dev/null || true
+        if "$LVA_DIR/.venv/bin/python3" -m linux_voice_assistant --help 2>&1 | grep -q "event-uri"; then
+            sed -i "s|--wake-model.*|--wake-model "\${LVA_WAKE_WORD}" \\
+    --event-uri 'tcp://127.0.0.1:${LED_PORT}'|" "$SERVICE_FILE"
+            systemctl daemon-reload
+            systemctl restart "$SERVICE_NAME" 2>/dev/null || true
+        else
+            warn "--event-uri not supported by this LVA version — LED state indicators disabled"
+        fi
     fi
 
     info "LED service installed — 3 APA102 LEDs will show satellite state"
