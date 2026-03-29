@@ -993,6 +993,7 @@ StandardError=journal
 # Ensure PulseAudio environment is set for the user
 Environment=PULSE_RUNTIME_PATH=/run/user/${VOICE_UID}
 Environment=XDG_RUNTIME_DIR=/run/user/${VOICE_UID}
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${VOICE_UID}/bus
 
 [Install]
 WantedBy=multi-user.target
