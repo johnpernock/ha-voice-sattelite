@@ -121,8 +121,11 @@ _resolve_devices() {
 
     case "$hw" in
         2mic_hat)
-            RESOLVED_MIC="plughw:CARD=seeed2micvoicec,DEV=0"
-            RESOLVED_SPK="plughw:CARD=seeed2micvoicec,DEV=0"
+            # ReSpeaker 2-Mic HAT uses PipeWire raw ALSA nodes (requires
+            # WirePlumber rule to disable ACP — see main.lua.d/51-seeed-2mic.lua)
+            # plughw: names don't work through PipeWire's PulseAudio compat layer
+            RESOLVED_MIC="alsa_input.platform-soc_sound.capture.0.0"
+            RESOLVED_SPK="alsa_output.platform-soc_sound.playback.0.0"
             ;;
         respeaker_lite)
             # ReSpeaker Lite uses USB audio — find it by name
@@ -844,6 +847,44 @@ fi
 # ── Step 2: 2-Mic HAT driver install (if needed) ──────────────────────────────
 if [[ "$ACTUAL_HW" == "2mic_hat" ]]; then
     _install_2mic_driver
+fi
+
+# ── 2mic HAT: WirePlumber rule + mixer state ──────────────────────────────────
+# Must run after dependencies are installed but before service starts.
+# Applied here so it survives --reset and fresh installs.
+if [[ "$ACTUAL_HW" == "2mic_hat" ]]; then
+    log "Configuring WirePlumber for seeed 2-mic HAT..."
+    WPHOME=$(eval echo "~${VOICE_USER}")
+    mkdir -p "${WPHOME}/.config/wireplumber/main.lua.d"
+    cat > "${WPHOME}/.config/wireplumber/main.lua.d/51-seeed-2mic.lua" << 'LUAEOF'
+-- Disable ACP for the seeed WM8960 card so PipeWire exposes raw ALSA nodes.
+-- Without this, WirePlumber only discovers the output profile and the
+-- capture device never appears as a PulseAudio source.
+alsa_monitor.rules = alsa_monitor.rules or {}
+table.insert(alsa_monitor.rules, {
+  matches = {
+    {
+      { "device.name", "=", "alsa_card.platform-soc_sound" },
+    },
+  },
+  apply_properties = {
+    ["api.alsa.use-acp"] = false,
+  },
+})
+LUAEOF
+    chown -R "${VOICE_USER}:${VOICE_USER}" "${WPHOME}/.config/wireplumber"
+    info "WirePlumber rule installed"
+
+    log "Restoring WM8960 mixer state..."
+    SEEED_STATE_URL="https://raw.githubusercontent.com/HinTak/seeed-voicecard/master/wm8960_asound.state"
+    SEEED_STATE_TMP="/tmp/wm8960_asound.state"
+    if curl -sL "$SEEED_STATE_URL" -o "$SEEED_STATE_TMP" 2>/dev/null; then
+        alsactl restore 1 -f "$SEEED_STATE_TMP" 2>/dev/null || true
+        cp "$SEEED_STATE_TMP" /var/lib/alsa/asound.state 2>/dev/null || true
+        info "WM8960 mixer state restored and saved to /var/lib/alsa/asound.state"
+    else
+        warn "Could not download wm8960 mixer state — audio output may be silent"
+    fi
 fi
 
 # ── Step 3: System dependencies ───────────────────────────────────────────────
