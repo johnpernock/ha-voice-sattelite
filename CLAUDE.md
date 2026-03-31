@@ -76,17 +76,29 @@ The entire project is one Bash script (`voice-setup.sh`) plus a config template.
 
 ## Blocking issue — WM8960 mic capture (as of 2026-03-31)
 
-**Root cause:** The WM8960 codec cannot be opened as two separate ALSA streams simultaneously. `module-alsa-sink` + `module-alsa-source` compete for `hw:seeed2micvoicec` — source always fails.
+**Root cause:** The WM8960 codec cannot be opened as two separate ALSA streams simultaneously. `module-alsa-sink` + `module-alsa-source` compete for `hw:seeed2micvoicec` — source always fails under PulseAudio.
 
 **Current broken state:** LVA is running and connected to HA but using `seeed_speaker.monitor` (output loopback) as its mic source. Wake word never triggers.
 
 **What works:**
 - ALSA direct recording: `arecord -D "plughw:seeed2micvoicec,0" -f S16_LE -r 16000 -c 2`
 - Speaker via mpv: `mpv --audio-device=pulse/alsa_output.platform-soc_sound.stereo-fallback`
-- When PipeWire was installed, wpctl showed `input_FL/FR [active]` — PipeWire handles WM8960 correctly
+- When PipeWire was installed, wpctl showed `input_FL/FR [active]` under `linux_voice_assistant` — PipeWire handles WM8960 correctly
 - HA Assist button triggers full pipeline and plays TTS
 
-**Pending fix — reinstall PipeWire:**
+### Why PipeWire was removed (and why that was likely a mistake)
+
+PipeWire was removed after `soundcard` 0.4.5 deadlocked on `recorder()` with PipeWire 1.4.x in **interactive test scripts** (`sudo -u pi python3 ...`). However:
+
+- When PipeWire was installed, `wpctl` showed `linux_voice_assistant` with `input_FL/FR [active]` — meaning LVA's systemd service was actively pulling from the hardware mic. A deadlock would not produce active streams.
+- The wake word was never triggering at the time, but the `probability_cutoff` was `0.85` — far too high for a room mic. It has since been lowered to `0.30`.
+- **Most likely sequence:** PipeWire was working correctly at the service level. Wake word failed due to the 0.85 threshold, not a deadlock. The interactive-script deadlock was a red herring.
+- The `soundcard` deadlock is real but **only affects interactive `sudo -u pi python3` sessions** — different session context from a `systemd User=pi` service.
+
+**Confidence: high.** Reinstalling PipeWire is expected to be a clean fix now that threshold is 0.30.
+
+### Fix — reinstall PipeWire
+
 ```bash
 sudo apt install pipewire pipewire-alsa pipewire-pulse wireplumber -y
 
@@ -99,29 +111,30 @@ sudo -u pi XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/ru
 sudo reboot
 ```
 
-**After reboot, verify:**
+### After reboot — verification order
+
+**Step 1: Confirm audio is flowing via native PipeWire (not compat layer)**
 ```bash
-# Must show both sink AND source
-sudo -u pi XDG_RUNTIME_DIR=/run/user/1000 pactl list sources short
-sudo -u pi XDG_RUNTIME_DIR=/run/user/1000 pactl list sinks short
-
-# Must show input_FL and input_FR [active] under linux_voice_assistant
-sudo -u pi XDG_RUNTIME_DIR=/run/user/1000 wpctl status | grep -A15 "Streams"
-```
-
-**Critical rules:**
-- **Never test mic with interactive `sudo -u pi python3` scripts** — `soundcard` 0.4.5 `recorder()` deadlocks with PipeWire 1.4.x interactively. Test only via the actual `linux-voice-assistant` service.
-- **`lva-audio-wait.sh` must never use `arecord`** — it holds the ALSA device and blocks LVA from starting.
-
-**If wake word still doesn't trigger after PipeWire reinstall:**
-```bash
-# Use pw-record to verify mic audio amplitude (NOT arecord, NOT python recorder)
 sudo -u pi XDG_RUNTIME_DIR=/run/user/1000 \
   pw-record --target=alsa_input.platform-soc_sound.stereo-fallback /tmp/test.wav &
-sleep 3; kill %1
-ls -la /tmp/test.wav   # 400KB+ = mic working; 44 bytes = capture still broken
+sleep 4; kill %1; ls -lh /tmp/test.wav
+# 400KB+ = mic working. 44 bytes = capture still broken.
 ```
-If 400KB+ but wake word still fails, lower `probability_cutoff` in `wakewords/okay_nabu.json` to `0.10`.
+Do this BEFORE anything else. If this passes, LVA is getting real audio.
+
+**Step 2: Confirm LVA streams are active**
+```bash
+sudo -u pi XDG_RUNTIME_DIR=/run/user/1000 wpctl status | grep -A15 "Streams"
+# Must show input_FL and input_FR [active] under linux_voice_assistant
+```
+
+**Step 3: Test wake word**
+Say "okay nabu" — should trigger. If not, check threshold is still 0.30 in `wakewords/okay_nabu.json`.
+
+**Critical rules:**
+- **Never test mic with interactive `sudo -u pi python3` scripts** — `soundcard` 0.4.5 deadlocks with PipeWire 1.4.x interactively. This is not representative of service behavior.
+- **`lva-audio-wait.sh` must never use `arecord`** — it holds the ALSA device and blocks LVA from starting.
+- **Never lower threshold below 0.10** — false positives become constant.
 
 ---
 
