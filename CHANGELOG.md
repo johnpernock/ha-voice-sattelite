@@ -128,3 +128,70 @@ PipeWire handles this correctly but soundcard deadlocks with PipeWire 1.4.x.
 - default_microphone() returns monitor (output loopback) not mic
 - Speaker works via mpv with PULSE_SERVER env var
 - Wake word never triggers because LVA is hearing speaker output not mic
+
+---
+
+## [Mar-Apr 2026] Session 2 — UCM investigation, PipeWire reinstall pending
+
+### UCM2 attempt summary
+- UCM files placed at `/usr/share/alsa/ucm2/seeed2micvoicec/`
+- `alsaucm -c seeed2micvoicec list _verbs` failed with error -2 (parse error)
+- Fixed by adding entry to `/usr/share/alsa/ucm2/conf.d/simple-card/seeed2micvoicec.conf`
+  which maps the `snd_soc_simple_card` driver to our UCM files
+- `alsaucm` now returns `HiFi` verb correctly — UCM is found and parsed
+- BUT: `module-alsa-card` still reports "Failed to find a working profile"
+  because PulseAudio ACP can't initialize the ALSA card with our UCM
+- Various EnableSequence cset formats tried — all fail at profile init stage
+
+### Key findings
+- The WM8960 cannot be opened as two separate ALSA streams simultaneously
+  (module-alsa-sink + module-alsa-source both trying hw:seeed2micvoicec fails)
+- `module-alsa-card` with UCM is the correct approach but profile init fails
+- PipeWire handles the WM8960 correctly — wpctl confirmed both capture channels
+  active when LVA was running with PipeWire
+- soundcard 0.4.5 deadlocks with PipeWire 1.4.x recorder() — interactive tests hang
+  BUT the deadlock may only affect interactive/sudo contexts not systemd services
+
+### Current state (session end)
+- PulseAudio 17.0 standalone still in place
+- UCM files in place at /usr/share/alsa/ucm2/seeed2micvoicec/
+- conf.d/simple-card/seeed2micvoicec.conf in place
+- PipeWire reinstall pending (decided to try PipeWire again after PulseAudio dead end)
+
+### Next session plan
+1. `sudo apt install pipewire pipewire-alsa pipewire-pulse wireplumber -y`
+2. Disable standalone PulseAudio user service
+3. Reboot
+4. Verify both sink AND source appear in wpctl/pactl
+5. Start LVA and verify wpctl shows input_FL/FR [active] under linux_voice_assistant
+6. Test wake word with threshold at 0.30
+7. If wake word still doesn't trigger — record mic audio using pw-record
+   and verify amplitude is non-zero before debugging further
+8. DO NOT test with interactive `sudo -u pi python3` recorder — those hang
+   regardless and are misleading. Test via the actual LVA service only.
+
+### Config files to restore after PipeWire reinstall
+```
+/etc/linux-voice-assistant.env:
+  LVA_MIC=alsa_input.platform-soc_sound.stereo-fallback
+  LVA_SPK=pulse/alsa_output.platform-soc_sound.stereo-fallback
+
+/home/pi/.config/systemd/user/linux-voice-assistant.service:
+  User service (not system service)
+  PULSE_SERVER=unix:%t/pulse/native
+  PULSE_COOKIE=%h/.config/pulse/cookie
+
+/home/pi/linux-voice-assistant/wakewords/okay_nabu.json:
+  probability_cutoff: 0.30 (lowered from 0.85)
+
+/home/pi/linux-voice-assistant/linux_voice_assistant/__main__.py:
+  Patched to fall back to default_microphone() on IndexError
+
+/usr/local/bin/lva-audio-wait.sh:
+  Checks for PulseAudio socket only — NO arecord test (arecord held device)
+
+/boot/firmware/config.txt:
+  dtparam=i2c_arm=on
+  dtparam=spi=on
+  dtoverlay=respeaker-2mic-v1_0
+```
