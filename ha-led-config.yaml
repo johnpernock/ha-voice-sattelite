@@ -1,0 +1,39 @@
+# =============================================================================
+#  ha-led-config.yaml
+#  Home Assistant configuration snippets for VoicePi4 LED control.
+#
+#  Replace VOICE_PI_IP with your Pi's IP address (e.g. 192.168.1.191).
+#
+#  Paste the rest_command block into your configuration.yaml,
+#  then restart HA (Developer Tools → Check Configuration → Restart).
+#
+#  For the automations, see ha-custom-automation/voice/
+# =============================================================================
+
+
+# =============================================================================
+#  REST COMMANDS — call from automations or Developer Tools → Services
+# =============================================================================
+rest_command:
+
+  # Turn LEDs off (night mode — LEDs go dark, service keeps running)
+  voice_pi_leds_off:
+    url: "http://VOICE_PI_IP:2702/leds/off"
+    method: POST
+
+  # Turn LEDs on (day mode — resume satellite state colors)
+  voice_pi_leds_on:
+    url: "http://VOICE_PI_IP:2702/leds/on"
+    method: POST
+
+
+# =============================================================================
+#  SENSOR — track current LED state
+# =============================================================================
+sensor:
+  - platform: rest
+    name: "VoicePi4 LED State"
+    unique_id: voice_pi4_led_state
+    resource: "http://VOICE_PI_IP:2702/leds/state"
+    value_template: "{{ value_json.leds }}"
+    scan_interval: 60

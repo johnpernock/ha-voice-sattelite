@@ -356,46 +356,70 @@ _install_2mic_driver() {
 
 # =============================================================================
 #  2-Mic HAT LED service — APA102 RGB LEDs via SPI
+#
+#  Watches LVA's systemd journal for pipeline events and drives the 3 APA102
+#  LEDs accordingly. No longer uses --event-uri (removed from newer LVA).
+#
+#  HTTP API on port 2702:
+#    POST /leds/on    → enable LEDs (day mode)
+#    POST /leds/off   → disable LEDs, turn off (night mode)
+#    GET  /leds/state → {"leds": "on"|"off"}
+#    GET  /health     → {"status": "ok", "uptime": N}
 # =============================================================================
 _install_led_service() {
     local LED_SCRIPT="$LVA_DIR/lva_2mic_leds.py"
     local LED_SERVICE_FILE="/etc/systemd/system/lva-2mic-leds.service"
+    local LED_API_PORT=2702
 
     log "Installing LED feedback service for 2-Mic HAT..."
 
     # Install spidev for APA102 SPI communication
-    "$LVA_DIR/.venv/bin/pip" install spidev --quiet 2>/dev/null ||         apt-get install -y python3-spidev --no-install-recommends -qq 2>/dev/null || true
+    "$LVA_DIR/.venv/bin/pip" install spidev --quiet 2>/dev/null || \
+        apt-get install -y python3-spidev --no-install-recommends -qq 2>/dev/null || true
 
-    # Write the LED event handler script
-    cat > "$LED_SCRIPT" << 'LEDEOF'
+    # Write the LED script — journal watcher + HTTP on/off API
+    cat > "$LED_SCRIPT" << LEDEOF
 #!/usr/bin/env python3
 """
-lva_2mic_leds.py — LED event handler for ReSpeaker 2-Mic Pi HAT V2.0
-Connects to LVA via --event-uri and drives the 3 APA102 RGB LEDs
-to show wake word, listening, processing, and idle states.
+lva_2mic_leds.py — LED control for ReSpeaker 2-Mic Pi HAT
+Watches LVA's systemd journal for pipeline events and drives 3 APA102 LEDs.
+
+HTTP API on port ${LED_API_PORT}:
+  POST /leds/on    -> enable LED updates (day mode)
+  POST /leds/off   -> disable LEDs, turn dark (night mode)
+  GET  /leds/state -> {"leds": "on"|"off"}
+  GET  /health     -> {"status": "ok", "uptime": N}
 """
 
-import asyncio
+import http.server
+import json
 import logging
-import struct
-import sys
+import subprocess
+import threading
 import time
 
 _LOG = logging.getLogger(__name__)
 
-# APA102 LED state colors
+API_PORT  = ${LED_API_PORT}
+VOICE_UID = ${VOICE_UID}
+
+# APA102 LED state colors (r, g, b, unused)
 COLORS = {
-    "idle":        (0,   0,   0,   0),    # off
-    "detect":      (0,   0, 100,   0),    # dim blue — waiting for wake word
-    "wake":        (0, 255,   0,   0),    # green — wake word heard
-    "listening":   (0,   0, 200,   0),    # blue — streaming audio
-    "processing":  (150, 75,   0,   0),   # amber — waiting for response
-    "speaking":    (0, 100, 100,   0),    # cyan — playing response
-    "error":       (200,  0,   0,   0),   # red — error state
+    "detect":     (0,   0, 100,   0),   # dim blue  — idle, waiting for wake word
+    "wake":       (0, 255,   0,   0),   # green     — wake word heard
+    "listening":  (0,   0, 200,   0),   # blue      — streaming audio to HA
+    "processing": (150, 75,   0,   0),  # amber     — waiting for response
+    "speaking":   (0, 100, 100,   0),   # cyan      — playing TTS response
+    "error":      (200,  0,   0,   0),  # red       — error state
+}
+BRIGHTNESS = {
+    "detect": 4, "wake": 20, "listening": 15,
+    "processing": 10, "speaking": 15, "error": 15,
 }
 NUM_LEDS = 3
 SPI_DEV  = 0
 SPI_CS   = 0
+
 
 class APA102:
     def __init__(self):
@@ -412,7 +436,6 @@ class APA102:
     def set_all(self, r, g, b, brightness=8):
         if not self._ok:
             return
-        # APA102 frame: start frame + LED frames + end frame
         start  = [0x00] * 4
         end    = [0xFF] * 4
         bright = 0xE0 | min(brightness, 31)
@@ -430,91 +453,130 @@ class APA102:
             self.off()
             self.spi.close()
 
-async def handle_events(leds):
-    """Read LVA events from stdin — one JSON object per line."""
-    import json
-    _LOG.info("LED event handler started")
-    leds.set_all(*COLORS["detect"][:3], brightness=4)
 
-    loop = asyncio.get_event_loop()
-    reader = asyncio.StreamReader()
-    protocol = asyncio.StreamReaderProtocol(reader)
-    await loop.connect_read_pipe(lambda: protocol, sys.stdin)
+# Global state
+_enabled   = True
+_state_lock = threading.Lock()
+_leds      = None
+START_TIME = time.time()
 
+
+def _apply(state):
+    """Set LED color for state, respecting the enabled flag."""
+    with _state_lock:
+        if not _enabled or _leds is None:
+            return
+        color = COLORS.get(state, COLORS["detect"])
+        _leds.set_all(*color[:3], brightness=BRIGHTNESS.get(state, 8))
+
+
+# Journal keyword → LED state mapping
+_JOURNAL_RULES = [
+    (["wake word", "wakeword", "detected", "keyword found"], "wake"),
+    (["streaming start", "streaming audio", "run pipeline", "listening"],  "listening"),
+    (["stt", "transcrib", "speech-to-text"],                               "processing"),
+    (["tts", "synthesiz", "text-to-speech", "playing"],                    "speaking"),
+    (["pipeline done", "streaming stop", "finished", "idle", "ready"],     "detect"),
+    (["error", "exception", "traceback", "failed"],                        "error"),
+]
+
+
+def _journal_watcher():
+    """Tail LVA's journal and drive LEDs from log output."""
+    cmd = ["journalctl", f"_UID={VOICE_UID}", "-f", "-n", "0", "--output=cat"]
     while True:
         try:
-            line = await reader.readline()
-            if not line:
-                break
-            event = json.loads(line.decode().strip())
-            etype = event.get("type", "")
-            _LOG.debug("Event: %s", etype)
-
-            if etype == "detection":
-                leds.set_all(*COLORS["wake"][:3], brightness=20)
-            elif etype == "streaming-start":
-                leds.set_all(*COLORS["listening"][:3], brightness=15)
-            elif etype == "stt-start":
-                leds.set_all(*COLORS["listening"][:3], brightness=20)
-            elif etype in ("stt-stop", "synthesize"):
-                leds.set_all(*COLORS["processing"][:3], brightness=10)
-            elif etype == "tts-start":
-                leds.set_all(*COLORS["speaking"][:3], brightness=15)
-            elif etype in ("tts-played", "streaming-stop"):
-                leds.set_all(*COLORS["detect"][:3], brightness=4)
-            elif etype == "error":
-                leds.set_all(*COLORS["error"][:3], brightness=15)
-                await asyncio.sleep(2)
-                leds.set_all(*COLORS["detect"][:3], brightness=4)
-        except json.JSONDecodeError:
-            pass
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            _LOG.info("Journal watcher started (UID=%s)", VOICE_UID)
+            for raw in proc.stdout:
+                line = raw.decode("utf-8", errors="replace").lower()
+                for keywords, state in _JOURNAL_RULES:
+                    if any(k in line for k in keywords):
+                        _apply(state)
+                        if state == "error":
+                            time.sleep(2)
+                            _apply("detect")
+                        break
         except Exception as e:
-            _LOG.error("Event handler error: %s", e)
+            _LOG.error("Journal watcher error: %s — restarting in 5s", e)
+        time.sleep(5)
+
+
+class _ApiHandler(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        global _enabled
+        if self.path == "/leds/on":
+            with _state_lock:
+                _enabled = True
+            _apply("detect")
+            self._json(200, {"leds": "on"})
+        elif self.path == "/leds/off":
+            with _state_lock:
+                _enabled = False
+            if _leds:
+                _leds.off()
+            self._json(200, {"leds": "off"})
+        else:
+            self._json(404, {"error": "not found"})
+
+    def do_GET(self):
+        if self.path == "/leds/state":
+            self._json(200, {"leds": "on" if _enabled else "off"})
+        elif self.path == "/health":
+            self._json(200, {"status": "ok", "uptime": int(time.time() - START_TIME)})
+        else:
+            self._json(404, {"error": "not found"})
+
+    def _json(self, code, body):
+        data = json.dumps(body).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", len(data))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def log_message(self, fmt, *args):
+        _LOG.debug("API: " + fmt, *args)
+
 
 def main():
-    logging.basicConfig(level=logging.INFO,
-                        format="%(asctime)s [leds] %(message)s",
-                        datefmt="%H:%M:%S")
-    leds = APA102()
+    global _leds
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [leds] %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    _leds = APA102()
+    _apply("detect")
+
+    watcher = threading.Thread(target=_journal_watcher, daemon=True)
+    watcher.start()
+
+    server = http.server.HTTPServer(("0.0.0.0", API_PORT), _ApiHandler)
+    _LOG.info("LED API listening on port %s", API_PORT)
     try:
-        asyncio.run(handle_events(leds))
+        server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
-        leds.close()
+        _leds.close()
+
 
 if __name__ == "__main__":
     main()
 LEDEOF
     chmod +x "$LED_SCRIPT"
-    chown "$VOICE_USER:$VOICE_USER" "$LED_SCRIPT"
+    chown root:root "$LED_SCRIPT"
 
-    # Write LED systemd service — reads events piped from LVA via --event-uri
-    # LVA connects to this service on tcp://127.0.0.1:10500 and sends JSON events
-    local LED_PORT=10500
-
-    # Create a simple TCP→stdin bridge so LVA can send events to the script
-    local LED_BRIDGE="/usr/local/bin/lva-led-bridge.sh"
-    cat > "$LED_BRIDGE" << BRIDGEOF
-#!/bin/bash
-# Bridge: listen on TCP port $LED_PORT, pipe events to the LED Python script
-exec socat TCP-LISTEN:${LED_PORT},fork,reuseaddr - |     ${LVA_DIR}/.venv/bin/python3 ${LED_SCRIPT}
-BRIDGEOF
-    chmod +x "$LED_BRIDGE"
-
-    # Install socat for the TCP bridge
-    apt-get install -y socat --no-install-recommends -qq 2>/dev/null || true
-
+    # Systemd service — runs as root for SPI + journal access
     cat > "$LED_SERVICE_FILE" << LEDSVCEOF
 [Unit]
-Description=LVA 2-Mic HAT LED Feedback
-After=${SERVICE_NAME}.service
-BindsTo=${SERVICE_NAME}.service
+Description=LVA 2-Mic HAT LED Control
+After=network.target
 
 [Service]
 Type=simple
-User=${VOICE_USER}
-ExecStart=${LED_BRIDGE}
+ExecStart=${LVA_DIR}/.venv/bin/python3 ${LED_SCRIPT}
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
@@ -528,25 +590,16 @@ LEDSVCEOF
     systemctl enable lva-2mic-leds.service
     systemctl restart lva-2mic-leds.service 2>/dev/null || true
 
-    # Update LVA service to pass --event-uri (only if this LVA version supports it)
-    if ! grep -q "event-uri" "$SERVICE_FILE"; then
-        if "$LVA_DIR/.venv/bin/python3" -m linux_voice_assistant --help 2>&1 | grep -q "event-uri"; then
-            sed -i "s|--wake-model.*|--wake-model "\${LVA_WAKE_WORD}" \\
-    --event-uri 'tcp://127.0.0.1:${LED_PORT}'|" "$SERVICE_FILE"
-            systemctl daemon-reload
-            systemctl restart "$SERVICE_NAME" 2>/dev/null || true
-        else
-            warn "--event-uri not supported by this LVA version — LED state indicators disabled"
-        fi
-    fi
-
     info "LED service installed — 3 APA102 LEDs will show satellite state"
-    log "  Off/dim blue  = idle/waiting"
-    log "  Green flash   = wake word detected"
-    log "  Blue          = listening"
-    log "  Amber         = processing"
-    log "  Cyan          = speaking response"
-    log "  Red           = error"
+    log "  Dim blue  = idle/waiting for wake word"
+    log "  Green     = wake word detected"
+    log "  Blue      = listening / streaming to HA"
+    log "  Amber     = processing (STT/response)"
+    log "  Cyan      = speaking TTS response"
+    log "  Red       = error (clears after 2s)"
+    info "LED API running on port ${LED_API_PORT}"
+    log "  POST http://$(hostname -I | awk '{print \$1}'):${LED_API_PORT}/leds/off  (night)"
+    log "  POST http://$(hostname -I | awk '{print \$1}'):${LED_API_PORT}/leds/on   (day)"
 }
 
 # =============================================================================
@@ -1059,6 +1112,9 @@ echo -e "  Speaker         : ${BOLD}${RESOLVED_SPK}${NC}"
 echo -e "  Wake word       : ${BOLD}${VOICE_WAKE_WORD}${NC}"
 echo -e "  ESPHome port    : ${BOLD}${VOICE_PORT}${NC}"
 echo -e "  Service         : ${BOLD}$(systemctl is-active $SERVICE_NAME)${NC}"
+if [[ "$ACTUAL_HW" == "2mic_hat" ]] && [[ "${VOICE_ENABLE_LEDS:-true}" == "true" ]]; then
+    echo -e "  LED API         : ${BOLD}http://$(hostname -I | awk '{print $1}'):2702${NC}"
+fi
 echo ""
 hr
 banner "  Next step — Add to Home Assistant"
@@ -1089,4 +1145,12 @@ if [[ "$ACTUAL_HW" == "2mic_hat" ]]; then
     echo "    arecord -D \"${RESOLVED_MIC}\" -f S16_LE -r 16000 -d 3 /tmp/test.wav"
     echo "    aplay  -D \"${RESOLVED_SPK}\" /tmp/test.wav"
     echo ""
+    if [[ "${VOICE_ENABLE_LEDS:-true}" == "true" ]]; then
+        echo "  LED API (port 2702):"
+        echo "    curl -X POST http://localhost:2702/leds/off   # night mode"
+        echo "    curl -X POST http://localhost:2702/leds/on    # day mode"
+        echo "    curl http://localhost:2702/leds/state         # check state"
+        echo "    sudo journalctl -u lva-2mic-leds -f           # LED service logs"
+        echo ""
+    fi
 fi
