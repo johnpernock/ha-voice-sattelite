@@ -23,6 +23,13 @@
 #
 # VOICE_HARDWARE="auto"
 
+# ── 2-Mic HAT version ────────────────────────────────────────────────────────
+# v1_0 = ReSpeaker 2-Mic Pi HAT V1.0 (older, most common)
+# v2_0 = ReSpeaker 2-Mic Pi HAT V2.0 (newer)
+# Default is v1_0
+#
+# VOICE_2MIC_VERSION="v1_0"
+
 # ── Audio devices (only set these if VOICE_HARDWARE=custom) ───────────────────
 # Find your device names by running: sudo bash voice-setup.sh --detect
 # Use plughw: format for best compatibility, e.g. plughw:CARD=seeed2micvoicec,DEV=0
