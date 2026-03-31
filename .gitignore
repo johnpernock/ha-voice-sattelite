@@ -34,3 +34,6 @@ __pycache__/
 *.bak
 tmp/
 temp/
+
+# Claude Code session files
+.claude/
