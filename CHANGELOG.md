@@ -93,3 +93,38 @@ All notable changes to this project are documented here.
   LVA_MIC=alsa_input.platform-soc_sound.stereo-fallback
   LVA_SPK=pulse/alsa_output.platform-soc_sound.stereo-fallback
 ```
+
+---
+
+## [Mar-Apr 2026] — Trixie upgrade + deeper audio investigation
+
+### What was tried
+- Upgraded Pi to Trixie (Debian 13) — WirePlumber 0.5.8 now available
+- soundcard 0.4.5 deadlocks with PipeWire 1.4.2 on `recorder()` calls
+- Removed PipeWire, switched to standalone PulseAudio 17
+- PulseAudio ACP only exposes output profile for WM8960 — no input
+- module-alsa-sink and module-alsa-source cannot share hw:seeed2micvoicec simultaneously
+- Patched LVA __main__.py to fall back to default_microphone() on IndexError
+- lva-audio-wait.sh was locking ALSA device via arecord — fixed
+
+### Root cause
+The WM8960 codec needs to be opened as a single full-duplex ALSA stream.
+PulseAudio's separate sink/source modules compete for the device.
+PipeWire handles this correctly but soundcard deadlocks with PipeWire 1.4.x.
+
+### Pending fix options
+1. **UCM2 config** — create proper UCM2 for seeed2micvoicec that defines
+   both playback and capture paths so PulseAudio ACP exposes input profile
+2. **PipeWire + soundcard workaround** — use pw-cat for capture and mpv for
+   playback, bypassing soundcard's PulseAudio bindings entirely
+3. **PyAudio instead of soundcard** — patch LVA to use PyAudio which uses
+   ALSA directly and doesn't have the PulseAudio compat issue
+
+### Current Pi state (Trixie)
+- OS: Debian 13 Trixie
+- PulseAudio 17.0 standalone (PipeWire removed)
+- LVA runs as user service (not system service)
+- LVA patched to fall back to default_microphone()
+- default_microphone() returns monitor (output loopback) not mic
+- Speaker works via mpv with PULSE_SERVER env var
+- Wake word never triggers because LVA is hearing speaker output not mic
