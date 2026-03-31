@@ -60,7 +60,7 @@ The entire project is one Bash script (`voice-setup.sh`) plus a config template.
 ~/voice.log
 ```
 
-**LED feedback (2-Mic HAT only):** When `VOICE_ENABLE_LEDS=true`, installs `lva_2mic_leds.py` and a TCP bridge service (`lva-2mic-leds.service`). State colors: dim blue = idle, green = wake word, blue = listening, amber = processing, cyan = TTS playing, red = error.
+**LED feedback (2-Mic HAT only):** When `VOICE_ENABLE_LEDS=true`, installs `lva_2mic_leds.py` as `lva-2mic-leds.service` (runs as root). Tails LVA's systemd journal for pipeline events — no `--event-uri` dependency. Also serves an HTTP API on port 2702: `POST /leds/on`, `POST /leds/off`, `GET /leds/state`, `GET /health`. State colors: dim blue = idle, green = wake word, blue = listening, amber = processing, cyan = TTS playing, red = error. HA config snippets in `ha-led-config.yaml`; schedule automations in ha-custom-automation/voice/.
 
 ---
 

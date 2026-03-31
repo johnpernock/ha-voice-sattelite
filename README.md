@@ -178,7 +178,7 @@ The script detects the HAT is now present and completes the LVA install.
 
 ### LED feedback
 
-The 2-Mic HAT has 3 APA102 RGB LEDs. When `VOICE_ENABLE_LEDS=true` (default), the install automatically sets up LED feedback:
+The 2-Mic HAT has 3 APA102 RGB LEDs. When `VOICE_ENABLE_LEDS=true` (default), the install sets up `lva-2mic-leds.service` — a Python service that watches LVA's systemd journal and drives the LEDs based on pipeline state:
 
 | Color | State |
 |---|---|
@@ -189,7 +189,17 @@ The 2-Mic HAT has 3 APA102 RGB LEDs. When `VOICE_ENABLE_LEDS=true` (default), th
 | Cyan | Playing TTS response |
 | Red | Error (clears after 2 seconds) |
 
-To disable: set `VOICE_ENABLE_LEDS=false` in `voice.conf` and run `--reset`.
+**LED HTTP API (port 2702)** — turn LEDs on or off without stopping the satellite:
+
+```bash
+curl -X POST http://VOICE_PI_IP:2702/leds/off   # night mode — LEDs go dark
+curl -X POST http://VOICE_PI_IP:2702/leds/on    # day mode — resume state colors
+curl http://VOICE_PI_IP:2702/leds/state         # check current state
+```
+
+For HA automation, paste the `rest_command` block from `ha-led-config.yaml` into your `configuration.yaml`. Day/night schedule automations are in [ha-custom-automation/voice/](https://github.com/johnpernock/ha-custom-automation/tree/main/voice).
+
+To disable LEDs entirely: set `VOICE_ENABLE_LEDS=false` in `voice.conf` and run `--reset`.
 
 **Verify the HAT is detected:**
 ```bash
