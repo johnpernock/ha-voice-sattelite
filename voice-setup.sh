@@ -231,26 +231,36 @@ _resolve_devices() {
 }
 
 # =============================================================================
-#  2-Mic HAT V2.0 driver removal
+#  2-Mic HAT driver removal
 # =============================================================================
 _remove_hat_driver() {
-    hr; banner "  ReSpeaker 2-Mic HAT V2.0 — Driver Removal"; hr; echo ""
+    # Detect installed version from config.txt first, fall back to voice.conf default
+    local HAT_VER
+    if grep -q "dtoverlay=respeaker-2mic-v1_0" /boot/firmware/config.txt 2>/dev/null; then
+        HAT_VER="v1_0"
+    elif grep -q "dtoverlay=respeaker-2mic-v2_0" /boot/firmware/config.txt 2>/dev/null; then
+        HAT_VER="v2_0"
+    else
+        HAT_VER="${VOICE_2MIC_VERSION:-v1_0}"
+    fi
+
+    hr; banner "  ReSpeaker 2-Mic HAT ${HAT_VER} — Driver Removal"; hr; echo ""
 
     local REMOVED=false
 
     # Remove overlay entry from config.txt
-    if grep -q "dtoverlay=respeaker-2mic-v2_0" /boot/firmware/config.txt 2>/dev/null; then
-        sed -i '/dtoverlay=respeaker-2mic-v2_0/d' /boot/firmware/config.txt
-        info "Removed dtoverlay=respeaker-2mic-v2_0 from config.txt"
+    if grep -q "dtoverlay=respeaker-2mic-${HAT_VER}" /boot/firmware/config.txt 2>/dev/null; then
+        sed -i "/dtoverlay=respeaker-2mic-${HAT_VER}/d" /boot/firmware/config.txt
+        info "Removed dtoverlay=respeaker-2mic-${HAT_VER} from config.txt"
         REMOVED=true
     else
         log "dtoverlay not found in config.txt — already removed or never installed"
     fi
 
     # Remove the .dtbo overlay file
-    if [[ -f /boot/firmware/overlays/respeaker-2mic-v2_0.dtbo ]]; then
-        rm -f /boot/firmware/overlays/respeaker-2mic-v2_0.dtbo
-        info "Removed respeaker-2mic-v2_0.dtbo from overlays"
+    if [[ -f "/boot/firmware/overlays/respeaker-2mic-${HAT_VER}.dtbo" ]]; then
+        rm -f "/boot/firmware/overlays/respeaker-2mic-${HAT_VER}.dtbo"
+        info "Removed respeaker-2mic-${HAT_VER}.dtbo from overlays"
         REMOVED=true
     else
         log "Overlay file not found — already removed"
@@ -281,7 +291,8 @@ _remove_hat_driver() {
 #  2-Mic HAT V2.0 driver install (device tree overlay — no kernel compile)
 # =============================================================================
 _install_2mic_driver() {
-    hr; banner "  ReSpeaker 2-Mic HAT V2.0 — Driver Install"; hr; echo ""
+    local HAT_VER="${VOICE_2MIC_VERSION:-v1_0}"
+    hr; banner "  ReSpeaker 2-Mic HAT ${HAT_VER} — Driver Install"; hr; echo ""
 
     if aplay -l 2>/dev/null | grep -qi "seeed2micvoicec"; then
         info "2-Mic HAT driver already installed and detected"
@@ -302,8 +313,6 @@ _install_2mic_driver() {
             https://github.com/Seeed-Studio/seeed-linux-dtoverlays.git "$DT_DIR"
     fi
 
-    # Detect HAT version from voice.conf or default to V1
-    local HAT_VER="${VOICE_2MIC_VERSION:-v1_0}"
     log "Compiling device tree overlay for ReSpeaker 2-Mic HAT ${HAT_VER}..."
     cd "$DT_DIR"
     if ! make overlays/rpi/respeaker-2mic-${HAT_VER}-overlay.dtbo 2>/dev/null; then
