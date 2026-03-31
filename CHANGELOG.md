@@ -61,3 +61,35 @@ All notable changes to this project are documented here.
 - **systemd environment file** — `/etc/linux-voice-assistant.env` keeps all config out of the service unit for easy inspection and updates
 - **`loginctl enable-linger`** — service starts on boot without requiring a logged-in user session
 - **End-of-install summary** — prints satellite name, hardware, mic/speaker devices, ESPHome port, and HA discovery instructions
+
+---
+
+## [Mar 2026] — ReSpeaker 2-Mic HAT V1 audio stack investigation
+
+### Root cause findings
+
+**Device tree overlay was missing** — The V1 overlay (`respeaker-2mic-v1_0`) was not in `/boot/firmware/config.txt`. This caused the WM8960 codec to be partially initialized. Fixed by adding `dtoverlay=respeaker-2mic-v1_0` to config.txt.
+
+**WirePlumber 0.4.13 PulseAudio compat layer broken for capture** — PipeWire sees the seeed card and wpctl shows LVA actively capturing from `capture_FL/FR`, but `parecord`, `pw-record`, and soundcard's PulseAudio bindings all fail to open a capture stream (write only 44 bytes / WAV header). Output works fine.
+
+**Speaker output** — Works correctly via `mpv --audio-device=pulse/alsa_output.platform-soc_sound.stereo-fallback`. LVA SPK must use `pulse/` prefix.
+
+**Wake word model** — `okay_nabu.tflite` loads correctly, threshold lowered from 0.85 to 0.30 for better sensitivity.
+
+### Current state
+- LVA connects to HA successfully
+- Speaker/TTS plays through HAT speaker pins
+- Mic capture via PulseAudio compat layer broken — LVA receives silence
+- Pending fix: ALSA loopback or WirePlumber upgrade
+
+### Known working config
+```
+/boot/firmware/config.txt:
+  dtparam=i2c_arm=on
+  dtparam=spi=on
+  dtoverlay=respeaker-2mic-v1_0
+
+/etc/linux-voice-assistant.env:
+  LVA_MIC=alsa_input.platform-soc_sound.stereo-fallback
+  LVA_SPK=pulse/alsa_output.platform-soc_sound.stereo-fallback
+```
