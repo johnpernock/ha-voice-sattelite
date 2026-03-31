@@ -123,8 +123,9 @@ _resolve_devices() {
         2mic_hat)
             # ReSpeaker 2-Mic HAT V1/V2 — PipeWire ACP stereo-fallback names
             # Requires correct dtoverlay (v1_0 or v2_0) in /boot/firmware/config.txt
+            # SPK uses pulse/ prefix so mpv finds the device via PipeWire-pulse
             RESOLVED_MIC="alsa_input.platform-soc_sound.stereo-fallback"
-            RESOLVED_SPK="alsa_output.platform-soc_sound.stereo-fallback"
+            RESOLVED_SPK="pulse/alsa_output.platform-soc_sound.stereo-fallback"
             ;;
         respeaker_lite)
             # ReSpeaker Lite uses USB audio — find it by name
