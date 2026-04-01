@@ -149,11 +149,11 @@ dtoverlay=respeaker-2mic-v1_0
 ```
 LVA_NAME=office-satellite
 LVA_PORT=6053
-LVA_MIC=alsa_input.platform-soc_sound.stereo-fallback
+LVA_MIC=alsa_input.platform-soc_sound.HiFi__Mic__source
 LVA_SPK=pulse/alsa_output.platform-soc_sound.stereo-fallback
 LVA_WAKE_WORD=okay_nabu
 LVA_DIR=/home/pi/linux-voice-assistant
-PULSE_RUNTIME_PATH=/run/user/1000
+PULSE_RUNTIME_PATH=/run/user/1000/pulse
 PULSE_COOKIE=/home/pi/.config/pulse/cookie
 ```
 

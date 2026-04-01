@@ -4,6 +4,34 @@ All notable changes to this project are documented here.
 
 ---
 
+## [1.3.0] — 2026-03-31
+
+### Added
+
+- **`lva_2mic_leds.py`** — custom LED controller for ReSpeaker 2-Mic Pi HAT V1.0. Watches LVA's systemd journal for pipeline events and drives 3 APA102 LEDs via SPI. Runs as `lva-2mic-leds.service` (root, system service). No dependency on LVA's `--event-uri` hook.
+  - LED states: dim blue (idle), green (wake word), amber (processing), cyan (TTS playing), dim red (muted), red (error)
+  - **Mute auto-detection** — detects `mute_switch_on.flac` / `mute_switch_off.flac` in LVA's journal. Mute LED syncs to HA's mute toggle automatically — no HA automation required.
+  - **Brightness API** — `POST /leds/brightness {"brightness": 0.0-1.0}` scales all state brightnesses proportionally.
+  - Full HTTP API on port 2702: `/leds/on`, `/leds/off`, `/leds/brightness`, `/muted`, `/unmuted`, `/leds/state`, `/health`
+- **`ha-led-config.yaml`** — HA `rest_command` snippets for LED on/off/brightness control and a REST sensor for LED state. Paste into `configuration.yaml` to enable HA automations.
+- **`ha-custom-automation/voice/`** — day/night LED schedule automations (7am on, 10pm off).
+
+### Fixed (VoicePi4 — ReSpeaker 2-Mic HAT V1.0 on Debian Trixie)
+
+- **PipeWire reinstalled** — standalone PulseAudio cannot expose capture for WM8960 (sink and source compete for the device). PipeWire handles full-duplex correctly. LVA now captures mic audio and detects wake word reliably.
+- **`PULSE_RUNTIME_PATH`** must be `/run/user/1000/pulse` (not `/run/user/1000`) — corrected in both `/etc/linux-voice-assistant.env` and the `Environment=` line of the system service unit.
+- **`LVA_MIC`** correct PipeWire UCM node name: `alsa_input.platform-soc_sound.HiFi__Mic__source` (not `stereo-fallback`).
+- **`wyoming-satellite.service`** was holding the ALSA capture device open with `arecord`. Stopped and disabled.
+- **Stale user service** at `~/.config/systemd/user/linux-voice-assistant.service` had hardcoded `--audio-input-device default`. Disabled.
+- **`libavcodec61` missing** — installed via `sudo apt install libavcodec61 -y`.
+- **`spidev` .so corrupt** — fixed with `pip install --force-reinstall spidev`.
+
+### Known hardware limitation
+
+- **GPIO 17 / WM8960 IRQ conflict** — GPIO 17 is the physical button pin on the ReSpeaker 2-Mic HAT V1.0, but the WM8960 codec also drives it low during audio activity. Hardware button mute is not implemented — any `when_pressed` listener causes false mute triggers on every wake word. Deferred.
+
+---
+
 ## [1.2.0] — 2026-03-27
 
 ### Added

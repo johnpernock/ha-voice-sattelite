@@ -184,20 +184,23 @@ The 2-Mic HAT has 3 APA102 RGB LEDs. When `VOICE_ENABLE_LEDS=true` (default), th
 |---|---|
 | Dim blue | Idle — waiting for wake word |
 | Green | Wake word detected |
-| Blue | Listening / streaming audio to HA |
-| Amber | Processing — waiting for response |
+| Amber | Processing — waiting for HA response |
 | Cyan | Playing TTS response |
+| Dim red | Muted |
 | Red | Error (clears after 2 seconds) |
 
-**LED HTTP API (port 2702)** — turn LEDs on or off without stopping the satellite:
+**Mute is automatic** — the LED service detects mute/unmute events directly from LVA's own logs. No HA automation required.
+
+**LED HTTP API (port 2702):**
 
 ```bash
-curl -X POST http://VOICE_PI_IP:2702/leds/off   # night mode — LEDs go dark
-curl -X POST http://VOICE_PI_IP:2702/leds/on    # day mode — resume state colors
-curl http://VOICE_PI_IP:2702/leds/state         # check current state
+curl -X POST http://VOICE_PI_IP:2702/leds/off                          # night mode — LEDs go dark
+curl -X POST http://VOICE_PI_IP:2702/leds/on                           # day mode — resume state colors
+curl -X POST http://VOICE_PI_IP:2702/leds/brightness -d '{"brightness": 0.5}'  # dim all states by 50%
+curl http://VOICE_PI_IP:2702/leds/state                                # {"leds":"on","muted":false,"brightness":1.0}
 ```
 
-For HA automation, paste the `rest_command` block from `ha-led-config.yaml` into your `configuration.yaml`. Day/night schedule automations are in [ha-custom-automation/voice/](https://github.com/johnpernock/ha-custom-automation/tree/main/voice).
+For HA automation (day/night schedule), paste the `rest_command` block from `ha-led-config.yaml` into your `configuration.yaml`. Schedule automations are in [ha-custom-automation/voice/](https://github.com/johnpernock/ha-custom-automation/tree/main/voice).
 
 To disable LEDs entirely: set `VOICE_ENABLE_LEDS=false` in `voice.conf` and run `--reset`.
 
@@ -471,16 +474,20 @@ sudo bash voice-setup.sh --reset
 
 ### PulseAudio / PipeWire errors in logs
 
-LVA uses PulseAudio internally. If you see `Connection refused` or `Failed to connect to PulseAudio`:
+LVA uses PulseAudio's compat socket. On Debian Trixie, PipeWire with `pipewire-pulse` is required — standalone PulseAudio does not expose a capture source for the WM8960 codec.
 
 ```bash
-# Start PulseAudio as the kiosk user
-sudo -u johnpernock pulseaudio --start
+# Verify PipeWire is running as the pi user
+sudo -u pi XDG_RUNTIME_DIR=/run/user/1000 systemctl --user status pipewire wireplumber
 
-# Or switch to PipeWire (better on Trixie)
-sudo apt-get install pipewire pipewire-pulse wireplumber
-sudo systemctl --user enable --now wireplumber
+# Check PULSE_RUNTIME_PATH is correct in the service env (must be /run/user/1000/pulse)
+cat /etc/linux-voice-assistant.env | grep PULSE
+
+# If /run/user/1000/pulse/ is owned by root, fix it:
+sudo chown pi:pi /run/user/1000/pulse/
 ```
+
+> **Critical:** Never run `pactl` as root with the user's PipeWire socket — it corrupts the `/run/user/1000/pulse/` directory ownership and causes LVA to fail with `AssertionError`.
 
 ---
 
@@ -491,6 +498,8 @@ ha-voice-sattelite/
 ├── voice-setup.sh          Main install script (do not edit — use voice.conf)
 ├── voice.conf              Your local settings (git-ignored, survives pulls)
 ├── voice.conf.example      Template — copy to voice.conf to get started
+├── lva_2mic_leds.py        LED service for ReSpeaker 2-Mic HAT (SCPed to Pi, not auto-installed)
+├── ha-led-config.yaml      HA rest_command snippets for LED control
 ├── README.md               This file
 ├── CHANGELOG.md            Version history
 ├── LICENSE                 MIT
