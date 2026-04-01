@@ -26,6 +26,13 @@ rest_command:
     url: "http://VOICE_PI_IP:2702/leds/on"
     method: POST
 
+  # Set brightness multiplier (0.0 = off, 1.0 = full). Example: {"brightness": 0.5}
+  voice_pi_leds_brightness:
+    url: "http://VOICE_PI_IP:2702/leds/brightness"
+    method: POST
+    content_type: "application/json"
+    payload: '{"brightness": {{ brightness }}}'
+
 
 # =============================================================================
 #  SENSOR — track current LED state
