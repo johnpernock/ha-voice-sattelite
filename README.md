@@ -178,20 +178,92 @@ The script detects the HAT is now present and completes the LVA install.
 
 ### LED feedback
 
-The 2-Mic HAT has 3 APA102 RGB LEDs. When `VOICE_ENABLE_LEDS=true` (default), the install sets up `lva-2mic-leds.service` — a Python service that watches LVA's systemd journal and drives the LEDs based on pipeline state:
+The 2-Mic HAT has 3 APA102 RGB LEDs. When `VOICE_ENABLE_LEDS=true` (default), the install sets up `lva-2mic-leds.service` — a Python service that watches LVA's systemd journal and drives the LEDs based on pipeline state.
 
-| Color | State |
-|---|---|
-| Dim blue | Idle — waiting for wake word |
-| Green | Wake word detected |
-| Amber | Processing — waiting for HA response |
-| Cyan | Playing TTS response |
-| Dim red | Muted |
-| Red | Error (clears after 2 seconds) |
+#### LED states
+
+These are the states in the order they occur during a normal voice interaction:
+
+| State | Default color | When it shows | `voice.conf` key |
+|---|---|---|---|
+| `detect` | Dim blue | Always on — idle, waiting for wake word | `LED_COLOR_DETECT` / `LED_BRIGHTNESS_DETECT` |
+| `wake` | Green | Wake word just heard, pipeline starting | `LED_COLOR_WAKE` / `LED_BRIGHTNESS_WAKE` |
+| `listening` | Blue | Streaming your voice to Home Assistant | `LED_COLOR_LISTENING` / `LED_BRIGHTNESS_LISTENING` |
+| `processing` | Amber | HA received audio, running speech-to-text and thinking | `LED_COLOR_PROCESSING` / `LED_BRIGHTNESS_PROCESSING` |
+| `speaking` | Cyan | Playing the TTS response back through the speaker | `LED_COLOR_SPEAKING` / `LED_BRIGHTNESS_SPEAKING` |
+| `muted` | Dim red | Mic is muted (auto-detected from LVA logs, no HA automation needed) | `LED_COLOR_MUTED` / `LED_BRIGHTNESS_MUTED` |
+| `error` | Red | Something went wrong — clears automatically after 2 seconds | `LED_COLOR_ERROR` / `LED_BRIGHTNESS_ERROR` |
+
+After `speaking` completes (or after 15 seconds as a safety timeout), the LEDs return to `detect`.
+
+#### Customizing colors and brightness
+
+Colors and brightness are configured per state in `voice.conf`. The installer writes your settings to `/etc/lva-leds.json` which the LED service reads at startup.
+
+**Color format:** `"R G B"` — three values 0–255 each (standard RGB).  
+**Brightness format:** integer 0–31 — this is the APA102 LED hardware brightness register, separate from the color channels. Lower values conserve power and are easier on the eyes at night.
+
+Add any of these to your `voice.conf`:
+
+```bash
+# Colors — "R G B" format
+LED_COLOR_DETECT="0 0 100"       # dim blue   (default)
+LED_COLOR_WAKE="0 255 0"         # green      (default)
+LED_COLOR_LISTENING="0 0 200"    # blue       (default)
+LED_COLOR_PROCESSING="150 75 0"  # amber      (default)
+LED_COLOR_SPEAKING="0 100 100"   # cyan       (default)
+LED_COLOR_MUTED="200 0 0"        # red        (default)
+LED_COLOR_ERROR="200 0 0"        # red        (default)
+
+# Brightness — 0 (off) to 31 (full)
+LED_BRIGHTNESS_DETECT=4          # very dim   (default)
+LED_BRIGHTNESS_WAKE=20           # bright     (default)
+LED_BRIGHTNESS_LISTENING=15      # medium     (default)
+LED_BRIGHTNESS_PROCESSING=10     # medium     (default)
+LED_BRIGHTNESS_SPEAKING=15       # medium     (default)
+LED_BRIGHTNESS_MUTED=1           # barely visible (default)
+LED_BRIGHTNESS_ERROR=15          # medium     (default)
+```
+
+Then re-run the installer to apply: `sudo bash voice-setup.sh`
+
+**To tweak on the fly without re-running the installer**, edit `/etc/lva-leds.json` directly on the Pi and restart the service:
+
+```bash
+sudo nano /etc/lva-leds.json
+sudo systemctl restart lva-2mic-leds
+```
+
+The JSON file uses the same state names as `voice.conf`:
+
+```json
+{
+  "colors": {
+    "detect":     [0, 0, 100],
+    "wake":       [0, 255, 0],
+    "listening":  [0, 0, 200],
+    "processing": [150, 75, 0],
+    "speaking":   [0, 100, 100],
+    "muted":      [200, 0, 0],
+    "error":      [200, 0, 0]
+  },
+  "brightness": {
+    "detect":     4,
+    "wake":       20,
+    "listening":  15,
+    "processing": 10,
+    "speaking":   15,
+    "muted":      1,
+    "error":      15
+  }
+}
+```
+
+You can omit any state you don't want to change — the LED service falls back to the built-in defaults for anything not listed.
 
 **Mute is automatic** — the LED service detects mute/unmute events directly from LVA's own logs. No HA automation required.
 
-**LED HTTP API (port 2702):**
+#### LED HTTP API (port 2702)
 
 ```bash
 curl -X POST http://VOICE_PI_IP:2702/leds/off                          # night mode — LEDs go dark
