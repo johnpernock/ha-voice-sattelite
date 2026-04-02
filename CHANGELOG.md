@@ -4,6 +4,16 @@ All notable changes to this project are documented here.
 
 ---
 
+## [1.5.0] — 2026-04-02
+
+### Updated
+
+**`llm-system-prompt.md`** — added photo frame awareness to the voice assistant system prompt:
+- New **Photo Frame** section in "What You Can Do": describes play/pause, next/prev, and screen on/off capabilities
+- Added photo frame `rest_command` entity IDs to Key Entity IDs table
+
+---
+
 ## [1.4.0] — 2026-04-02
 
 ### Fixed
