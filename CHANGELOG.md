@@ -4,6 +4,21 @@ All notable changes to this project are documented here.
 
 ---
 
+## [1.4.0] — 2026-04-02
+
+### Fixed
+
+**`lva-2mic-leds.service` — `Restart=always`** (was `Restart=on-failure`). The LED service could permanently stop if it exited with a zero exit code (e.g. `sys.exit(0)` on clean shutdown after journal error). `Restart=always` ensures it always comes back, matching the `linux-voice-assistant.service` pattern.
+
+### Documented (CLAUDE.md — feature/gpio-button)
+
+**Expanded button behavior (TODO)** — When TTS is currently playing and the physical button is pressed, the desired behavior is to interrupt speech and restart the listening pipeline rather than toggle mute. Documented in CLAUDE.md under "TODO: Expanded button behavior":
+- Implementation approach outlined (check `_state` variable, call interrupt function in rising-edge handler)
+- Open questions noted: whether LVA exposes a REST endpoint or socket command to cancel mid-stream TTS, or whether `SIGHUP`/service restart is the right approach
+- Not yet implemented — awaiting live testing on VoicePi4 and LVA API investigation
+
+---
+
 ## [1.3.0] — 2026-03-31
 
 ### Added
