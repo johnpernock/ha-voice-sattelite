@@ -676,7 +676,7 @@ After=network.target
 [Service]
 Type=simple
 ExecStart=${LVA_DIR}/.venv/bin/python3 ${LED_SCRIPT}
-Restart=on-failure
+Restart=always
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
