@@ -81,6 +81,13 @@ LED_BRIGHTNESS_SPEAKING=15
 LED_BRIGHTNESS_MUTED=1
 LED_BRIGHTNESS_ERROR=15
 
+# Mute button — physical button on the 2-Mic HAT (GPIO 17)
+# BUTTON_PRESS_THRESHOLD: seconds the pin must stay low to count as a real press
+# (WM8960 IRQ pulses are < 10ms; raise if phantom mutes occur, lower if sluggish)
+VOICE_ENABLE_BUTTON=true
+BUTTON_GPIO=17
+BUTTON_PRESS_THRESHOLD=0.20
+
 # Home Assistant details (only needed if auto-discovery fails)
 VOICE_HA_HOST=""
 VOICE_HA_PORT=6053
@@ -433,6 +440,11 @@ _install_led_service() {
     "speaking":   ${LED_BRIGHTNESS_SPEAKING:-15},
     "muted":      ${LED_BRIGHTNESS_MUTED:-1},
     "error":      ${LED_BRIGHTNESS_ERROR:-15}
+  },
+  "button": {
+    "enabled":         ${VOICE_ENABLE_BUTTON:-true},
+    "gpio":            ${BUTTON_GPIO:-17},
+    "press_threshold": ${BUTTON_PRESS_THRESHOLD:-0.20}
   }
 }
 CFGJSON

@@ -95,7 +95,7 @@ State colors: dim blue = idle, green = wake word, amber = processing, cyan = TTS
 - **`PULSE_RUNTIME_PATH`** must be `/run/user/1000/pulse` (not `/run/user/1000`) — both in `/etc/linux-voice-assistant.env` AND in the `Environment=` line of the system service file
 - **`LVA_MIC`** correct value: `alsa_input.platform-soc_sound.HiFi__Mic__source` (PipeWire UCM profile name, not `stereo-fallback`)
 - **`/run/user/1000/pulse/` ownership:** If this directory becomes owned by root (e.g. from running `pactl` as root), LVA fails with `AssertionError` in soundcard. Fix: `sudo chown pi:pi /run/user/1000/pulse/`
-- **GPIO 17 / WM8960 IRQ:** GPIO 17 is the physical button pin BUT the WM8960 codec also drives it low during audio activity. Do not use `when_pressed` — it causes false mute triggers on wake word. Button feature deferred.
+- **GPIO 17 / WM8960 IRQ:** GPIO 17 is the physical button pin BUT the WM8960 codec also drives it low during audio activity. Do not use `when_pressed` — it causes false mute triggers on wake word. **Workaround implemented in `feature/gpio-button` branch:** `_button_watcher()` uses `RPi.GPIO` edge detection on both edges, measures pulse duration, and only calls `_toggle_mute()` if the pin stayed low for ≥ `BUTTON_THRESHOLD` seconds (default 200ms). WM8960 IRQ pulses are typically < 10ms. Needs live testing on VoicePi4 before merging to main.
 
 ### LED service (lva-2mic-leds)
 
