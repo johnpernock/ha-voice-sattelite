@@ -62,6 +62,25 @@ VOICE_SPEAKER_OUTPUT=""
 # true = enable LED feedback (wake, listening, processing, idle states)
 VOICE_ENABLE_LEDS=true
 
+# LED colors per state — "R G B" format, each value 0-255
+# Only used when VOICE_HARDWARE=2mic_hat and VOICE_ENABLE_LEDS=true
+LED_COLOR_DETECT="0 0 100"       # dim blue   — idle, waiting for wake word
+LED_COLOR_WAKE="0 255 0"         # green      — wake word heard
+LED_COLOR_LISTENING="0 0 200"    # blue       — streaming audio to HA
+LED_COLOR_PROCESSING="150 75 0"  # amber      — waiting for response
+LED_COLOR_SPEAKING="0 100 100"   # cyan       — playing TTS
+LED_COLOR_MUTED="200 0 0"        # red        — muted
+LED_COLOR_ERROR="200 0 0"        # red        — error
+
+# LED brightness per state — APA102 hardware scale 0-31
+LED_BRIGHTNESS_DETECT=4
+LED_BRIGHTNESS_WAKE=20
+LED_BRIGHTNESS_LISTENING=15
+LED_BRIGHTNESS_PROCESSING=10
+LED_BRIGHTNESS_SPEAKING=15
+LED_BRIGHTNESS_MUTED=1
+LED_BRIGHTNESS_ERROR=15
+
 # Home Assistant details (only needed if auto-discovery fails)
 VOICE_HA_HOST=""
 VOICE_HA_PORT=6053
@@ -379,6 +398,7 @@ _install_led_service() {
     local LED_SCRIPT="$LVA_DIR/lva_2mic_leds.py"
     local LED_SERVICE_FILE="/etc/systemd/system/lva-2mic-leds.service"
     local LED_API_PORT=2702
+    local LED_CFG_FILE="/etc/lva-leds.json"
 
     log "Installing LED feedback service for 2-Mic HAT..."
 
@@ -386,7 +406,47 @@ _install_led_service() {
     "$LVA_DIR/.venv/bin/pip" install spidev --quiet 2>/dev/null || \
         apt-get install -y python3-spidev --no-install-recommends -qq 2>/dev/null || true
 
-    # Write the LED script — journal watcher + HTTP on/off API
+    # Write LED color/brightness config from LED_* voice.conf variables
+    IFS=' ' read -r _dr _dg _db <<< "${LED_COLOR_DETECT:-0 0 100}"
+    IFS=' ' read -r _wr _wg _wb <<< "${LED_COLOR_WAKE:-0 255 0}"
+    IFS=' ' read -r _lr _lg _lb <<< "${LED_COLOR_LISTENING:-0 0 200}"
+    IFS=' ' read -r _pr _pg _pb <<< "${LED_COLOR_PROCESSING:-150 75 0}"
+    IFS=' ' read -r _sr _sg _sb <<< "${LED_COLOR_SPEAKING:-0 100 100}"
+    IFS=' ' read -r _mr _mg _mb <<< "${LED_COLOR_MUTED:-200 0 0}"
+    IFS=' ' read -r _er _eg _eb <<< "${LED_COLOR_ERROR:-200 0 0}"
+    cat > "$LED_CFG_FILE" << CFGJSON
+{
+  "colors": {
+    "detect":     [${_dr:-0}, ${_dg:-0}, ${_db:-100}],
+    "wake":       [${_wr:-0}, ${_wg:-255}, ${_wb:-0}],
+    "listening":  [${_lr:-0}, ${_lg:-0}, ${_lb:-200}],
+    "processing": [${_pr:-150}, ${_pg:-75}, ${_pb:-0}],
+    "speaking":   [${_sr:-0}, ${_sg:-100}, ${_sb:-100}],
+    "muted":      [${_mr:-200}, ${_mg:-0}, ${_mb:-0}],
+    "error":      [${_er:-200}, ${_eg:-0}, ${_eb:-0}]
+  },
+  "brightness": {
+    "detect":     ${LED_BRIGHTNESS_DETECT:-4},
+    "wake":       ${LED_BRIGHTNESS_WAKE:-20},
+    "listening":  ${LED_BRIGHTNESS_LISTENING:-15},
+    "processing": ${LED_BRIGHTNESS_PROCESSING:-10},
+    "speaking":   ${LED_BRIGHTNESS_SPEAKING:-15},
+    "muted":      ${LED_BRIGHTNESS_MUTED:-1},
+    "error":      ${LED_BRIGHTNESS_ERROR:-15}
+  }
+}
+CFGJSON
+    chmod 644 "$LED_CFG_FILE"
+    log "LED config written to $LED_CFG_FILE"
+
+    # Deploy LED script — prefer repo copy (full-featured), fall back to inline
+    if [[ -f "$SCRIPT_DIR/lva_2mic_leds.py" ]]; then
+        cp "$SCRIPT_DIR/lva_2mic_leds.py" "$LED_SCRIPT"
+        chmod +x "$LED_SCRIPT"
+        chown root:root "$LED_SCRIPT"
+        log "Deployed lva_2mic_leds.py from repo"
+    else
+    # Fallback: write minimal LED script inline (no git clone available)
     cat > "$LED_SCRIPT" << LEDEOF
 #!/usr/bin/env python3
 """
@@ -423,8 +483,25 @@ COLORS = {
 }
 BRIGHTNESS = {
     "detect": 4, "wake": 20, "listening": 15,
-    "processing": 10, "speaking": 15, "error": 15,
+    "processing": 10, "speaking": 15, "error": 15, "muted": 1,
 }
+
+_CFG_PATH = "/etc/lva-leds.json"
+try:
+    with open(_CFG_PATH) as _f:
+        _cfg = json.load(_f)
+    for _state, _rgb in _cfg.get("colors", {}).items():
+        if _state in COLORS and len(_rgb) >= 3:
+            COLORS[_state] = (int(_rgb[0]), int(_rgb[1]), int(_rgb[2]), 0)
+    for _state, _br in _cfg.get("brightness", {}).items():
+        if _state in BRIGHTNESS:
+            BRIGHTNESS[_state] = max(0, min(31, int(_br)))
+except FileNotFoundError:
+    pass
+except Exception as _e:
+    import sys as _sys
+    print(f"[leds] Warning: could not load {_CFG_PATH}: {_e}", file=_sys.stderr)
+
 NUM_LEDS = 3
 SPI_DEV  = 0
 SPI_CS   = 0
@@ -576,6 +653,7 @@ if __name__ == "__main__":
 LEDEOF
     chmod +x "$LED_SCRIPT"
     chown root:root "$LED_SCRIPT"
+    fi  # end else (fallback inline script)
 
     # Systemd service — runs as root for SPI + journal access
     cat > "$LED_SERVICE_FILE" << LEDSVCEOF

@@ -64,3 +64,28 @@
 # Port 6053 is the ESPHome default — HA discovers it automatically via mDNS
 # Only change if you have a port conflict
 # VOICE_PORT=6053
+
+# ── LED colors and brightness (2-Mic HAT only) ───────────────────────────────
+# Applied when VOICE_HARDWARE=2mic_hat and VOICE_ENABLE_LEDS=true.
+# The installer writes these to /etc/lva-leds.json which the LED service reads
+# at startup. You can also edit /etc/lva-leds.json directly on the Pi and
+# restart the service: sudo systemctl restart lva-2mic-leds
+#
+# Colors: "R G B" — each channel 0-255
+# Brightness: integer 0-31 (APA102 hardware brightness, separate from color)
+#
+# LED_COLOR_DETECT="0 0 100"       # dim blue   — idle, waiting for wake word
+# LED_COLOR_WAKE="0 255 0"         # green      — wake word heard
+# LED_COLOR_LISTENING="0 0 200"    # blue       — streaming audio to HA
+# LED_COLOR_PROCESSING="150 75 0"  # amber      — waiting for response
+# LED_COLOR_SPEAKING="0 100 100"   # cyan       — playing TTS
+# LED_COLOR_MUTED="200 0 0"        # red        — muted
+# LED_COLOR_ERROR="200 0 0"        # red        — error
+#
+# LED_BRIGHTNESS_DETECT=4
+# LED_BRIGHTNESS_WAKE=20
+# LED_BRIGHTNESS_LISTENING=15
+# LED_BRIGHTNESS_PROCESSING=10
+# LED_BRIGHTNESS_SPEAKING=15
+# LED_BRIGHTNESS_MUTED=1
+# LED_BRIGHTNESS_ERROR=15

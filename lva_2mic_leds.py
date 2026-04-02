@@ -38,6 +38,27 @@ BRIGHTNESS = {
     "detect": 4, "wake": 20, "listening": 15,
     "processing": 10, "speaking": 15, "error": 15, "muted": 1,
 }
+
+# ── Optional config override ───────────────────────────────────────────────────
+# /etc/lva-leds.json may override COLORS and/or BRIGHTNESS per state.
+# Written by voice-setup.sh from LED_COLOR_* / LED_BRIGHTNESS_* in voice.conf.
+# Can also be edited directly — restart lva-2mic-leds to pick up changes.
+_CFG_PATH = "/etc/lva-leds.json"
+try:
+    with open(_CFG_PATH) as _f:
+        _cfg = json.load(_f)
+    for _state, _rgb in _cfg.get("colors", {}).items():
+        if _state in COLORS and len(_rgb) >= 3:
+            COLORS[_state] = (int(_rgb[0]), int(_rgb[1]), int(_rgb[2]), 0)
+    for _state, _br in _cfg.get("brightness", {}).items():
+        if _state in BRIGHTNESS:
+            BRIGHTNESS[_state] = max(0, min(31, int(_br)))
+except FileNotFoundError:
+    pass
+except Exception as _e:
+    import sys as _sys
+    print(f"[leds] Warning: could not load {_CFG_PATH}: {_e}", file=_sys.stderr)
+
 NUM_LEDS = 3
 SPI_DEV  = 0
 SPI_CS   = 0
