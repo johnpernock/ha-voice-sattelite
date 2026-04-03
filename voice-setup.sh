@@ -1099,6 +1099,17 @@ if [[ "$ACTUAL_HW" == "2mic_hat" ]]; then
     fi
 elif [[ "$ACTUAL_HW" == "voice_bonnet" ]]; then
     _install_voice_bonnet_driver
+    # Route DAC output to speaker — these default to off on the WM8960
+    BONNET_CARD=$(aplay -l 2>/dev/null | grep -i wm8960 | awk -F'[: ]' '{print $3}' | head -1)
+    if [[ -n "$BONNET_CARD" ]]; then
+        amixer -c "$BONNET_CARD" sset 'Left Output Mixer PCM'  on  &>/dev/null
+        amixer -c "$BONNET_CARD" sset 'Right Output Mixer PCM' on  &>/dev/null
+        amixer -c "$BONNET_CARD" sset 'Speaker' 90%               &>/dev/null
+        alsactl store &>/dev/null
+        log "WM8960 speaker mixer initialized and saved (card $BONNET_CARD)"
+    else
+        warn "Could not find wm8960soundcard — run --detect if speaker is silent"
+    fi
 fi
 
 # ── Step 3: System dependencies ───────────────────────────────────────────────
