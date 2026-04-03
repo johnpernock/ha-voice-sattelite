@@ -15,6 +15,7 @@ Designed as a companion to [ha-pi-smarthome](https://github.com/johnpernock/ha-p
 - **Local wake word detection** — okay_nabu, hey_jarvis, or alexa built-in via OHF LVA
 - **systemd service** — starts on boot, auto-restarts on failure, logs to journald
 - **Simple flags** — `--detect`, `--status`, `--update`, `--reset`
+- **Onboard LEDs disabled** — activity and power LEDs turned off in `config.txt` during install (takes effect after reboot)
 
 ---
 
@@ -275,6 +276,45 @@ curl http://VOICE_PI_IP:2702/leds/state                                # {"leds"
 For HA automation (day/night schedule), paste the `rest_command` block from `ha-led-config.yaml` into your `configuration.yaml`. Schedule automations are in [ha-custom-automation/voice/](https://github.com/johnpernock/ha-custom-automation/tree/main/voice).
 
 To disable LEDs entirely: set `VOICE_ENABLE_LEDS=false` in `voice.conf` and run `--reset`.
+
+#### Mute button
+
+The 2-Mic HAT has a physical button wired to GPIO 17. Pressing it toggles mute — same effect as the auto-detected mute from LVA's journal, but hardware-driven.
+
+**The complication:** the WM8960 codec on the HAT also uses GPIO 17 as its interrupt output (`IRQ`), and drives the pin low briefly during audio activity. To avoid phantom mute toggles, the button watcher only acts on presses held for at least `BUTTON_PRESS_THRESHOLD` seconds (default 200ms). WM8960 IRQ pulses are typically under 10ms so there's plenty of margin, but if you experience false triggers the threshold can be raised.
+
+The button watcher starts automatically with `lva-2mic-leds.service`. Check its status via the state endpoint:
+
+```bash
+curl http://VOICE_PI_IP:2702/leds/state
+# {"leds":"on","muted":false,"brightness":1.0,"button":"enabled"}
+# button field: "enabled" | "disabled" | "unavailable" (RPi.GPIO not installed)
+```
+
+**Tuning in `voice.conf`:**
+
+```bash
+VOICE_ENABLE_BUTTON=true        # set false to disable the button entirely
+BUTTON_GPIO=17                  # BCM pin number (default matches HAT hardware)
+BUTTON_PRESS_THRESHOLD=0.20     # seconds — raise if phantom toggles occur
+```
+
+Or edit `/etc/lva-leds.json` directly on the Pi and restart the service:
+
+```json
+"button": {
+  "enabled": true,
+  "gpio": 17,
+  "press_threshold": 0.20
+}
+```
+
+**If `RPi.GPIO` is not installed**, the button watcher exits silently and `"button": "unavailable"` is reported in the state endpoint. Install it with:
+
+```bash
+/home/pi/linux-voice-assistant/.venv/bin/pip install RPi.GPIO
+sudo systemctl restart lva-2mic-leds
+```
 
 **Verify the HAT is detected:**
 ```bash

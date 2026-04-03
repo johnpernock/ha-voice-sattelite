@@ -9,13 +9,15 @@ HTTP API on port 2702:
   POST /leds/brightness      -> set brightness multiplier {"brightness": 0.0-1.0}
   POST /muted                -> red LED (muted)
   POST /unmuted              -> dim blue LED (unmuted)
-  GET  /leds/state           -> {"leds": "on"|"off", "muted": bool, "brightness": N}
+  GET  /leds/state           -> {"leds": "on"|"off", "muted": bool, "brightness": N, "button": "enabled"|"disabled"|"unavailable"}
   GET  /health               -> {"status": "ok", "uptime": N}
 """
 
 import http.server
 import json
 import logging
+import os
+import signal
 import subprocess
 import threading
 import time
@@ -39,10 +41,18 @@ BRIGHTNESS = {
     "processing": 10, "speaking": 15, "error": 15, "muted": 1,
 }
 
+# ── Button defaults (overridable via /etc/lva-leds.json "button" key) ─────────
+BUTTON_GPIO      = 17     # BCM pin — physical button on the 2-Mic HAT
+BUTTON_THRESHOLD = 0.20   # seconds — min hold time to count as a real press
+                           # WM8960 IRQ pulses are typically < 10ms so 200ms
+                           # gives plenty of headroom; raise if false triggers
+                           # persist, lower if the button feels sluggish
+BUTTON_ENABLED   = True
+
 # ── Optional config override ───────────────────────────────────────────────────
-# /etc/lva-leds.json may override COLORS and/or BRIGHTNESS per state.
-# Written by voice-setup.sh from LED_COLOR_* / LED_BRIGHTNESS_* in voice.conf.
-# Can also be edited directly — restart lva-2mic-leds to pick up changes.
+# /etc/lva-leds.json may override COLORS, BRIGHTNESS, and/or button settings.
+# Written by voice-setup.sh from voice.conf variables.
+# Can also be edited directly on the Pi — restart lva-2mic-leds to pick up.
 _CFG_PATH = "/etc/lva-leds.json"
 try:
     with open(_CFG_PATH) as _f:
@@ -53,6 +63,13 @@ try:
     for _state, _br in _cfg.get("brightness", {}).items():
         if _state in BRIGHTNESS:
             BRIGHTNESS[_state] = max(0, min(31, int(_br)))
+    _btn_cfg = _cfg.get("button", {})
+    if "gpio" in _btn_cfg:
+        BUTTON_GPIO = int(_btn_cfg["gpio"])
+    if "press_threshold" in _btn_cfg:
+        BUTTON_THRESHOLD = max(0.05, float(_btn_cfg["press_threshold"]))
+    if "enabled" in _btn_cfg:
+        BUTTON_ENABLED = bool(_btn_cfg["enabled"])
 except FileNotFoundError:
     pass
 except Exception as _e:
@@ -100,18 +117,23 @@ class APA102:
 _enabled          = True
 _muted            = False
 _brightness_scale = 1.0
+_current_state    = "detect"   # last state passed to _apply()
 _state_lock       = threading.Lock()
 _leds             = None
 _reset_timer      = None
+_button_status    = "disabled"   # "enabled" | "disabled" | "unavailable"
 START_TIME        = time.time()
+
+_PIPELINE_STATES  = {"wake", "listening", "processing", "speaking"}
 
 
 def _apply(state):
-    global _reset_timer
+    global _reset_timer, _current_state
     if _reset_timer is not None:
         _reset_timer.cancel()
         _reset_timer = None
     with _state_lock:
+        _current_state = state
         if not _enabled or _leds is None:
             return
         if _muted and state != "muted":
@@ -124,6 +146,45 @@ def _apply(state):
         _reset_timer = threading.Timer(15.0, _apply, args=["detect"])
         _reset_timer.daemon = True
         _reset_timer.start()
+
+
+def _signal_lva(sig):
+    """Send a signal to the LVA process."""
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", "linux_voice_assistant"],
+            capture_output=True, text=True, timeout=2,
+        )
+        if result.returncode == 0:
+            pid = int(result.stdout.strip().split("\n")[0])
+            os.kill(pid, sig)
+            return True
+    except Exception as e:
+        _LOG.warning("Could not signal LVA process: %s", e)
+    return False
+
+
+def _button_action():
+    """Decide what to do on button press based on current pipeline state."""
+    with _state_lock:
+        active = _current_state in _PIPELINE_STATES
+
+    if active:
+        _LOG.info("Button: cancelling active pipeline (state=%s)", _current_state)
+        _signal_lva(signal.SIGUSR2)
+        _apply("detect")
+    else:
+        global _muted
+        with _state_lock:
+            _muted = not _muted
+            new_muted = _muted
+        _signal_lva(signal.SIGUSR1)
+        if new_muted:
+            _LOG.info("Button: muted")
+            _apply("muted")
+        else:
+            _LOG.info("Button: unmuted")
+            _apply("detect")
 
 
 _JOURNAL_RULES = [
@@ -164,6 +225,84 @@ def _journal_watcher():
         except Exception as e:
             _LOG.error("Journal watcher error: %s — restarting in 5s", e)
         time.sleep(5)
+
+
+def _button_watcher():
+    """
+    Watch GPIO BUTTON_GPIO for mute-toggle button presses.
+
+    The WM8960 codec on the 2-Mic HAT shares GPIO 17 as its IRQ output and
+    drives it low briefly during audio activity.  We filter these out by only
+    acting on pulses that stay low for at least BUTTON_THRESHOLD seconds.
+    Typical WM8960 IRQ pulses are < 10ms; a deliberate tap is > 50ms.
+
+    Uses lgpio (the modern GPIO library for Trixie / kernel 6.6+).
+    If lgpio is not installed, or BUTTON_ENABLED is False, this thread
+    exits silently so the rest of the service is unaffected.
+    """
+    global _button_status
+
+    if not BUTTON_ENABLED:
+        _LOG.info("Button watcher disabled via config")
+        _button_status = "disabled"
+        return
+
+    try:
+        import lgpio
+    except ImportError:
+        _LOG.warning("lgpio not available — button watcher disabled "
+                     "(install with: pip install lgpio)")
+        _button_status = "unavailable"
+        return
+
+    h = None
+    try:
+        h = lgpio.gpiochip_open(0)
+        lgpio.gpio_claim_input(h, BUTTON_GPIO, lgpio.SET_PULL_UP)
+
+        _button_status = "enabled"
+        _LOG.info(
+            "Button watcher started — GPIO %d, press threshold %.0fms",
+            BUTTON_GPIO, BUTTON_THRESHOLD * 1000,
+        )
+
+        fall_time = 0.0
+        last_state = 1  # assume high (not pressed)
+
+        while True:
+            state = lgpio.gpio_read(h, BUTTON_GPIO)
+            if state == 0 and last_state == 1:
+                # Falling edge — pin just went low; record when
+                fall_time = time.time()
+            elif state == 1 and last_state == 0:
+                # Rising edge — pin released; measure hold duration
+                if fall_time > 0:
+                    duration = time.time() - fall_time
+                    if duration >= BUTTON_THRESHOLD:
+                        _LOG.info(
+                            "Button press on GPIO %d (held %.0fms) — toggling mute",
+                            BUTTON_GPIO, duration * 1000,
+                        )
+                        _button_action()
+                    else:
+                        _LOG.debug(
+                            "GPIO %d pulse ignored (%.1fms < threshold %.0fms) — "
+                            "likely WM8960 IRQ",
+                            BUTTON_GPIO, duration * 1000, BUTTON_THRESHOLD * 1000,
+                        )
+                    fall_time = 0.0
+            last_state = state
+            time.sleep(0.005)  # 5ms poll — responsive but negligible CPU
+
+    except Exception as e:
+        _LOG.error("Button watcher error: %s", e)
+        _button_status = "unavailable"
+    finally:
+        if h is not None:
+            try:
+                lgpio.gpiochip_close(h)
+            except Exception:
+                pass
 
 
 class _ApiHandler(http.server.BaseHTTPRequestHandler):
@@ -208,7 +347,12 @@ class _ApiHandler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/leds/state":
-            self._json(200, {"leds": "on" if _enabled else "off", "muted": _muted, "brightness": _brightness_scale})
+            self._json(200, {
+                "leds":       "on" if _enabled else "off",
+                "muted":      _muted,
+                "brightness": _brightness_scale,
+                "button":     _button_status,
+            })
         elif self.path == "/health":
             self._json(200, {"status": "ok", "uptime": int(time.time() - START_TIME)})
         else:
@@ -238,6 +382,9 @@ def main():
 
     watcher = threading.Thread(target=_journal_watcher, daemon=True)
     watcher.start()
+
+    btn_thread = threading.Thread(target=_button_watcher, daemon=True)
+    btn_thread.start()
 
     server = http.server.HTTPServer(("0.0.0.0", API_PORT), _ApiHandler)
     _LOG.info("LED API listening on port %s", API_PORT)

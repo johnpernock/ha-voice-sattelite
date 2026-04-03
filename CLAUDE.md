@@ -62,6 +62,12 @@ The entire project is one Bash script (`voice-setup.sh`) plus a config template.
 
 **LED feedback (2-Mic HAT only):** When `VOICE_ENABLE_LEDS=true`, installs `lva_2mic_leds.py` as `lva-2mic-leds.service` (runs as root). Tails LVA's systemd journal for pipeline events — no `--event-uri` dependency. Mute state is detected automatically from LVA's journal (`mute_switch_on.flac` / `mute_switch_off.flac` log lines) — no HA automation needed.
 
+**Button watcher:** Uses `lgpio` (not `RPi.GPIO` — edge detection is broken on Trixie/kernel 6.6+). Polls GPIO 17 at 5ms intervals, filters WM8960 IRQ pulses under 200ms. Context-aware behavior:
+- **Idle / muted** → sends `SIGUSR1` to LVA → `_set_muted()` → plays mute sound, updates HA
+- **Active pipeline** (wake/listening/processing/speaking) → sends `SIGUSR2` to LVA → clears `_is_streaming_audio` + calls `stop()` → returns to idle
+
+No HA credentials or satellite name needed. `lgpio` must be installed in the LVA venv: `pip install lgpio`.
+
 HTTP API on port 2702:
 - `POST /leds/on` — enable LEDs (day mode)
 - `POST /leds/off` — disable LEDs, go dark (night mode)
@@ -95,7 +101,36 @@ State colors: dim blue = idle, green = wake word, amber = processing, cyan = TTS
 - **`PULSE_RUNTIME_PATH`** must be `/run/user/1000/pulse` (not `/run/user/1000`) — both in `/etc/linux-voice-assistant.env` AND in the `Environment=` line of the system service file
 - **`LVA_MIC`** correct value: `alsa_input.platform-soc_sound.HiFi__Mic__source` (PipeWire UCM profile name, not `stereo-fallback`)
 - **`/run/user/1000/pulse/` ownership:** If this directory becomes owned by root (e.g. from running `pactl` as root), LVA fails with `AssertionError` in soundcard. Fix: `sudo chown pi:pi /run/user/1000/pulse/`
-- **GPIO 17 / WM8960 IRQ:** GPIO 17 is the physical button pin BUT the WM8960 codec also drives it low during audio activity. Do not use `when_pressed` — it causes false mute triggers on wake word. Button feature deferred.
+- **GPIO 17 / WM8960 IRQ:** GPIO 17 is the physical button pin BUT the WM8960 codec also drives it low during audio activity. Do not use `when_pressed` — it causes false mute triggers on wake word. **Workaround implemented in `feature/gpio-button` branch:** `_button_watcher()` uses `RPi.GPIO` edge detection on both edges, measures pulse duration, and only calls `_toggle_mute()` if the pin stayed low for ≥ `BUTTON_THRESHOLD` seconds (default 200ms). WM8960 IRQ pulses are typically < 10ms. Needs live testing on VoicePi4 before merging to main.
+
+### GPIO button — WORKING (2026-04-03)
+
+Physical mute button on GPIO 17 is fully functional:
+- `lgpio` replaces `RPi.GPIO` (edge detection broken on Trixie kernel 6.6+)
+- 5ms polling loop detects press/release; WM8960 IRQ pulses (<10ms) are ignored
+- On valid press: sends `SIGUSR1` to LVA → `_set_muted()` → plays mute sound + updates HA
+- LED switches immediately (dim red = muted, dim blue = unmuted)
+
+**Critical:** Never restart via `sudo -u pi ... systemctl --user restart linux-voice-assistant`. This re-activates the stale user service at `~/.config/systemd/user/linux-voice-assistant.service` which has hardcoded `--audio-input-device default` and crash-loops. Always use the system service: `sudo systemctl restart linux-voice-assistant`.
+
+### TODO: Expanded button behavior (not yet implemented)
+
+Desired button behavior beyond the current mute-toggle:
+
+| Current state | Button action | Expected outcome |
+|--------------|---------------|-----------------|
+| Idle / muted | Press | Toggle mute (current behavior — implemented) |
+| Speaking (TTS playing) | Press | **Interrupt TTS** and restart the listening pipeline |
+
+The "interrupt TTS" case requires investigating how LVA exposes pipeline control:
+- Does LVA have a REST endpoint or socket command to cancel mid-stream TTS?
+- Alternatively, can the systemd service be `SIGHUP`d / restarted cleanly mid-speech?
+- The `_state` variable in `lva_2mic_leds.py` tracks `"speaking"` — the button watcher can check this before deciding whether to mute or interrupt.
+
+Implementation approach (when ready):
+1. Track current LED state in a module-level variable accessible to `_button_watcher`
+2. In `_on_edge` rising-edge handler: if state is `"speaking"`, call an interrupt function instead of `_toggle_mute()`
+3. The interrupt function should signal LVA to cancel the current TTS and re-enter the listening state
 
 ### LED service (lva-2mic-leds)
 
@@ -130,9 +165,47 @@ See Architecture section above for full HTTP API reference.
 
 ## LVA patches applied on Pi
 
-1. **`~/linux-voice-assistant/linux_voice_assistant/__main__.py`** (~line 241): falls back to `default_microphone()` on `IndexError` when named mic device not found
-2. **`~/linux-voice-assistant/.venv/.../soundcard/pulseaudio.py`** (~line 114): patched `sys.argv` bug — returns `"lva"` instead of `sys.argv[1][:30]`
-3. **`~/linux-voice-assistant/wakewords/okay_nabu.json`**: `probability_cutoff` lowered `0.85` → `0.30`
+All patches are applied directly on the Pi — they are not in upstream LVA and are not regenerated by `voice-setup.sh`. Re-apply after `--reset`.
+
+1. **`__main__.py`** — `import signal` added to imports
+
+2. **`__main__.py`** — `signal.signal(signal.SIGUSR1, signal.SIG_IGN)` at the very top of `main()`, before argument parsing. Prevents SIGUSR1 from killing LVA during slow startup before the real handler is installed.
+
+3. **`__main__.py`** — After `loop = asyncio.get_running_loop()`, two signal handlers:
+   ```python
+   # SIGUSR1 — toggle mute
+   def _handle_sigusr1(signum, frame):
+       new_muted = not state.muted
+       if state.satellite is not None:
+           loop.call_soon_threadsafe(state.satellite._set_muted, new_muted)
+       else:
+           state.muted = new_muted
+   signal.signal(signal.SIGUSR1, _handle_sigusr1)
+
+   # SIGUSR2 — cancel active pipeline
+   def _handle_sigusr2(signum, frame):
+       if state.satellite is not None:
+           def _cancel():
+               state.satellite._is_streaming_audio = False
+               state.satellite.stop()
+           loop.call_soon_threadsafe(_cancel)
+   signal.signal(signal.SIGUSR2, _handle_sigusr2)
+   ```
+
+4. **`satellite.py` — `play_tts()`**: guard added so a cancelled pipeline doesn't play its response when HA finishes processing:
+   ```python
+   def play_tts(self) -> None:
+       if (not self._tts_url) or self._tts_played:
+           return
+       if not self._pipeline_active:   # ← added
+           return
+   ```
+
+5. **`__main__.py`** (~line 247): falls back to `default_microphone()` on `IndexError` when named mic device not found
+
+6. **`soundcard/pulseaudio.py`** (~line 114): patched `sys.argv` bug — returns `"lva"` instead of `sys.argv[1][:30]`
+
+7. **`wakewords/okay_nabu.json`**: `probability_cutoff` lowered `0.85` → `0.30`
 
 ---
 

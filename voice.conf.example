@@ -89,3 +89,14 @@
 # LED_BRIGHTNESS_SPEAKING=15
 # LED_BRIGHTNESS_MUTED=1
 # LED_BRIGHTNESS_ERROR=15
+
+# ── Mute button (2-Mic HAT only) ─────────────────────────────────────────────
+# The HAT's physical button is on GPIO 17, which the WM8960 codec also uses as
+# its IRQ output. The button watcher filters out codec IRQ pulses (< 10ms) by
+# only acting on presses held for at least BUTTON_PRESS_THRESHOLD seconds.
+# Raise the threshold if you get phantom mute toggles during wake-word events;
+# lower it if deliberate taps aren't being detected.
+#
+# VOICE_ENABLE_BUTTON=true
+# BUTTON_GPIO=17
+# BUTTON_PRESS_THRESHOLD=0.20

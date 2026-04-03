@@ -81,6 +81,13 @@ LED_BRIGHTNESS_SPEAKING=15
 LED_BRIGHTNESS_MUTED=1
 LED_BRIGHTNESS_ERROR=15
 
+# Mute button — physical button on the 2-Mic HAT (GPIO 17)
+# BUTTON_PRESS_THRESHOLD: seconds the pin must stay low to count as a real press
+# (WM8960 IRQ pulses are < 10ms; raise if phantom mutes occur, lower if sluggish)
+VOICE_ENABLE_BUTTON=true
+BUTTON_GPIO=17
+BUTTON_PRESS_THRESHOLD=0.20
+
 # Home Assistant details (only needed if auto-discovery fails)
 VOICE_HA_HOST=""
 VOICE_HA_PORT=6053
@@ -433,6 +440,11 @@ _install_led_service() {
     "speaking":   ${LED_BRIGHTNESS_SPEAKING:-15},
     "muted":      ${LED_BRIGHTNESS_MUTED:-1},
     "error":      ${LED_BRIGHTNESS_ERROR:-15}
+  },
+  "button": {
+    "enabled":         ${VOICE_ENABLE_BUTTON:-true},
+    "gpio":            ${BUTTON_GPIO:-17},
+    "press_threshold": ${BUTTON_PRESS_THRESHOLD:-0.20}
   }
 }
 CFGJSON
@@ -1020,6 +1032,32 @@ apt-get install -y --no-install-recommends \
 usermod -a -G audio "$VOICE_USER" 2>/dev/null || true
 
 info "Dependencies installed"
+
+# ── Step 3b: Disable onboard LEDs ─────────────────────────────────────────────
+RASPI_CONFIG_FILE=/boot/firmware/config.txt
+[[ ! -f "$RASPI_CONFIG_FILE" ]] && RASPI_CONFIG_FILE=/boot/config.txt
+
+if [[ -f "$RASPI_CONFIG_FILE" ]]; then
+    LED_ADDED=false
+    for led_param in \
+        "dtparam=act_led_trigger=none" \
+        "dtparam=act_led_activelow=off" \
+        "dtparam=pwr_led_trigger=none" \
+        "dtparam=pwr_led_activelow=off"
+    do
+        if ! grep -q "^${led_param}" "$RASPI_CONFIG_FILE"; then
+            echo "$led_param" >> "$RASPI_CONFIG_FILE"
+            LED_ADDED=true
+        fi
+    done
+    if $LED_ADDED; then
+        log "Onboard LEDs disabled in config.txt (takes effect after reboot)"
+    else
+        log "Onboard LEDs already disabled in config.txt"
+    fi
+else
+    warn "config.txt not found — skipping LED disable"
+fi
 
 # ── Step 4: Enable lingering (run services without login) ─────────────────────
 hr; banner "  Step 2/7 — User session setup"; hr; echo ""
