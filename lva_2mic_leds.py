@@ -117,19 +117,23 @@ class APA102:
 _enabled          = True
 _muted            = False
 _brightness_scale = 1.0
+_current_state    = "detect"   # last state passed to _apply()
 _state_lock       = threading.Lock()
 _leds             = None
 _reset_timer      = None
 _button_status    = "disabled"   # "enabled" | "disabled" | "unavailable"
 START_TIME        = time.time()
 
+_PIPELINE_STATES  = {"wake", "listening", "processing", "speaking"}
+
 
 def _apply(state):
-    global _reset_timer
+    global _reset_timer, _current_state
     if _reset_timer is not None:
         _reset_timer.cancel()
         _reset_timer = None
     with _state_lock:
+        _current_state = state
         if not _enabled or _leds is None:
             return
         if _muted and state != "muted":
@@ -144,8 +148,8 @@ def _apply(state):
         _reset_timer.start()
 
 
-def _signal_lva_mute():
-    """Send SIGUSR1 to the LVA process to toggle its mute state."""
+def _signal_lva(sig):
+    """Send a signal to the LVA process."""
     try:
         result = subprocess.run(
             ["pgrep", "-f", "linux_voice_assistant"],
@@ -153,25 +157,34 @@ def _signal_lva_mute():
         )
         if result.returncode == 0:
             pid = int(result.stdout.strip().split("\n")[0])
-            os.kill(pid, signal.SIGUSR1)
+            os.kill(pid, sig)
             return True
     except Exception as e:
         _LOG.warning("Could not signal LVA process: %s", e)
     return False
 
 
-def _toggle_mute():
-    global _muted
+def _button_action():
+    """Decide what to do on button press based on current pipeline state."""
     with _state_lock:
-        _muted = not _muted
-        new_muted = _muted
-    _signal_lva_mute()
-    if new_muted:
-        _LOG.info("Button: muted")
-        _apply("muted")
-    else:
-        _LOG.info("Button: unmuted")
+        active = _current_state in _PIPELINE_STATES
+
+    if active:
+        _LOG.info("Button: cancelling active pipeline (state=%s)", _current_state)
+        _signal_lva(signal.SIGUSR2)
         _apply("detect")
+    else:
+        global _muted
+        with _state_lock:
+            _muted = not _muted
+            new_muted = _muted
+        _signal_lva(signal.SIGUSR1)
+        if new_muted:
+            _LOG.info("Button: muted")
+            _apply("muted")
+        else:
+            _LOG.info("Button: unmuted")
+            _apply("detect")
 
 
 _JOURNAL_RULES = [
@@ -270,7 +283,7 @@ def _button_watcher():
                             "Button press on GPIO %d (held %.0fms) — toggling mute",
                             BUTTON_GPIO, duration * 1000,
                         )
-                        _toggle_mute()
+                        _button_action()
                     else:
                         _LOG.debug(
                             "GPIO %d pulse ignored (%.1fms < threshold %.0fms) — "
