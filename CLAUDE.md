@@ -62,6 +62,13 @@ The entire project is one Bash script (`voice-setup.sh`) plus a config template.
 
 **LED feedback (2-Mic HAT only):** When `VOICE_ENABLE_LEDS=true`, installs `lva_2mic_leds.py` as `lva-2mic-leds.service` (runs as root). Tails LVA's systemd journal for pipeline events — no `--event-uri` dependency. Mute state is detected automatically from LVA's journal (`mute_switch_on.flac` / `mute_switch_off.flac` log lines) — no HA automation needed.
 
+**Button watcher:** Uses `lgpio` (not `RPi.GPIO` — edge detection is broken on Trixie/kernel 6.6+). Polls GPIO 17 at 5ms intervals, filters WM8960 IRQ pulses under 200ms. On a valid press, sends `SIGUSR1` to the LVA process (`pgrep -f linux_voice_assistant`) which triggers `_set_muted()` directly — plays the mute sound and updates HA. No HA credentials or satellite name needed. `lgpio` must be installed in the LVA venv: `pip install lgpio`.
+
+**LVA `__main__.py` patch (mute signal):** Two additions required on the Pi (not in upstream LVA, applied manually):
+1. `import signal` added to imports
+2. `signal.signal(signal.SIGUSR1, signal.SIG_IGN)` at the very top of `main()` — protects against SIGUSR1 killing LVA during startup before the real handler is installed
+3. After `loop = asyncio.get_running_loop()`: installs the real handler that calls `loop.call_soon_threadsafe(state.satellite._set_muted, new_muted)`
+
 HTTP API on port 2702:
 - `POST /leds/on` — enable LEDs (day mode)
 - `POST /leds/off` — disable LEDs, go dark (night mode)
@@ -96,6 +103,16 @@ State colors: dim blue = idle, green = wake word, amber = processing, cyan = TTS
 - **`LVA_MIC`** correct value: `alsa_input.platform-soc_sound.HiFi__Mic__source` (PipeWire UCM profile name, not `stereo-fallback`)
 - **`/run/user/1000/pulse/` ownership:** If this directory becomes owned by root (e.g. from running `pactl` as root), LVA fails with `AssertionError` in soundcard. Fix: `sudo chown pi:pi /run/user/1000/pulse/`
 - **GPIO 17 / WM8960 IRQ:** GPIO 17 is the physical button pin BUT the WM8960 codec also drives it low during audio activity. Do not use `when_pressed` — it causes false mute triggers on wake word. **Workaround implemented in `feature/gpio-button` branch:** `_button_watcher()` uses `RPi.GPIO` edge detection on both edges, measures pulse duration, and only calls `_toggle_mute()` if the pin stayed low for ≥ `BUTTON_THRESHOLD` seconds (default 200ms). WM8960 IRQ pulses are typically < 10ms. Needs live testing on VoicePi4 before merging to main.
+
+### GPIO button — WORKING (2026-04-03)
+
+Physical mute button on GPIO 17 is fully functional:
+- `lgpio` replaces `RPi.GPIO` (edge detection broken on Trixie kernel 6.6+)
+- 5ms polling loop detects press/release; WM8960 IRQ pulses (<10ms) are ignored
+- On valid press: sends `SIGUSR1` to LVA → `_set_muted()` → plays mute sound + updates HA
+- LED switches immediately (dim red = muted, dim blue = unmuted)
+
+**Critical:** Never restart via `sudo -u pi ... systemctl --user restart linux-voice-assistant`. This re-activates the stale user service at `~/.config/systemd/user/linux-voice-assistant.service` which has hardcoded `--audio-input-device default` and crash-loops. Always use the system service: `sudo systemctl restart linux-voice-assistant`.
 
 ### TODO: Expanded button behavior (not yet implemented)
 

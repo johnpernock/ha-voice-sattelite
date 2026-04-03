@@ -16,6 +16,8 @@ HTTP API on port 2702:
 import http.server
 import json
 import logging
+import os
+import signal
 import subprocess
 import threading
 import time
@@ -142,11 +144,28 @@ def _apply(state):
         _reset_timer.start()
 
 
+def _signal_lva_mute():
+    """Send SIGUSR1 to the LVA process to toggle its mute state."""
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", "linux_voice_assistant"],
+            capture_output=True, text=True, timeout=2,
+        )
+        if result.returncode == 0:
+            pid = int(result.stdout.strip().split("\n")[0])
+            os.kill(pid, signal.SIGUSR1)
+            return True
+    except Exception as e:
+        _LOG.warning("Could not signal LVA process: %s", e)
+    return False
+
+
 def _toggle_mute():
     global _muted
     with _state_lock:
         _muted = not _muted
         new_muted = _muted
+    _signal_lva_mute()
     if new_muted:
         _LOG.info("Button: muted")
         _apply("muted")
@@ -204,7 +223,8 @@ def _button_watcher():
     acting on pulses that stay low for at least BUTTON_THRESHOLD seconds.
     Typical WM8960 IRQ pulses are < 10ms; a deliberate tap is > 50ms.
 
-    If RPi.GPIO is not installed, or BUTTON_ENABLED is False, this thread
+    Uses lgpio (the modern GPIO library for Trixie / kernel 6.6+).
+    If lgpio is not installed, or BUTTON_ENABLED is False, this thread
     exits silently so the rest of the service is unaffected.
     """
     global _button_status
@@ -215,27 +235,36 @@ def _button_watcher():
         return
 
     try:
-        import RPi.GPIO as GPIO
+        import lgpio
     except ImportError:
-        _LOG.warning("RPi.GPIO not available — button watcher disabled "
-                     "(install with: pip install RPi.GPIO)")
+        _LOG.warning("lgpio not available — button watcher disabled "
+                     "(install with: pip install lgpio)")
         _button_status = "unavailable"
         return
 
+    h = None
     try:
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setup(BUTTON_GPIO, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        h = lgpio.gpiochip_open(0)
+        lgpio.gpio_claim_input(h, BUTTON_GPIO, lgpio.SET_PULL_UP)
 
-        _fall_time = [0.0]   # list so the nested callback can mutate it
+        _button_status = "enabled"
+        _LOG.info(
+            "Button watcher started — GPIO %d, press threshold %.0fms",
+            BUTTON_GPIO, BUTTON_THRESHOLD * 1000,
+        )
 
-        def _on_edge(channel):
-            if GPIO.input(BUTTON_GPIO) == GPIO.LOW:
+        fall_time = 0.0
+        last_state = 1  # assume high (not pressed)
+
+        while True:
+            state = lgpio.gpio_read(h, BUTTON_GPIO)
+            if state == 0 and last_state == 1:
                 # Falling edge — pin just went low; record when
-                _fall_time[0] = time.time()
-            else:
-                # Rising edge — pin released; check how long it was held
-                if _fall_time[0] > 0:
-                    duration = time.time() - _fall_time[0]
+                fall_time = time.time()
+            elif state == 1 and last_state == 0:
+                # Rising edge — pin released; measure hold duration
+                if fall_time > 0:
+                    duration = time.time() - fall_time
                     if duration >= BUTTON_THRESHOLD:
                         _LOG.info(
                             "Button press on GPIO %d (held %.0fms) — toggling mute",
@@ -248,29 +277,19 @@ def _button_watcher():
                             "likely WM8960 IRQ",
                             BUTTON_GPIO, duration * 1000, BUTTON_THRESHOLD * 1000,
                         )
-                _fall_time[0] = 0.0
-
-        GPIO.add_event_detect(
-            BUTTON_GPIO, GPIO.BOTH, callback=_on_edge, bouncetime=10
-        )
-        _button_status = "enabled"
-        _LOG.info(
-            "Button watcher started — GPIO %d, press threshold %.0fms",
-            BUTTON_GPIO, BUTTON_THRESHOLD * 1000,
-        )
-
-        # Keep thread alive; GPIO callbacks fire on their own
-        while True:
-            time.sleep(1)
+                    fall_time = 0.0
+            last_state = state
+            time.sleep(0.005)  # 5ms poll — responsive but negligible CPU
 
     except Exception as e:
         _LOG.error("Button watcher error: %s", e)
         _button_status = "unavailable"
     finally:
-        try:
-            GPIO.cleanup(BUTTON_GPIO)
-        except Exception:
-            pass
+        if h is not None:
+            try:
+                lgpio.gpiochip_close(h)
+            except Exception:
+                pass
 
 
 class _ApiHandler(http.server.BaseHTTPRequestHandler):
