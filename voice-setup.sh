@@ -135,6 +135,8 @@ _detect_hardware() {
         echo "2mic_hat"
     elif aplay -l 2>/dev/null | grep -qi "ReSpeaker\|SEEED\|XVF"; then
         echo "respeaker_lite"
+    elif aplay -l 2>/dev/null | grep -qi "wm8960soundcard\|wm8960-soundcard"; then
+        echo "voice_bonnet"
     elif arecord -l 2>/dev/null | grep -qi "USB\|usb"; then
         echo "usb"
     else
@@ -150,6 +152,14 @@ _resolve_devices() {
             # ReSpeaker 2-Mic HAT V1/V2 — PipeWire ACP stereo-fallback names
             # Requires correct dtoverlay (v1_0 or v2_0) in /boot/firmware/config.txt
             # SPK uses pulse/ prefix so mpv finds the device via PipeWire-pulse
+            RESOLVED_MIC="alsa_input.platform-soc_sound.stereo-fallback"
+            RESOLVED_SPK="pulse/alsa_output.platform-soc_sound.stereo-fallback"
+            ;;
+        voice_bonnet)
+            # Adafruit Voice Bonnet — WM8960 codec via wm8960-soundcard dtoverlay
+            # Same platform-soc_sound bus as the 2-Mic HAT; defaults to stereo-fallback.
+            # If PipeWire uses different node names on your OS, run --detect and
+            # set VOICE_MIC_DEVICE / VOICE_SPEAKER_DEVICE in voice.conf.
             RESOLVED_MIC="alsa_input.platform-soc_sound.stereo-fallback"
             RESOLVED_SPK="pulse/alsa_output.platform-soc_sound.stereo-fallback"
             ;;
@@ -383,6 +393,60 @@ _install_2mic_driver() {
 
     # Mark that we need a reboot
     echo "REBOOT_PENDING=true" > "$INSTALL_MARKER"
+
+    read -r -p "  Reboot now? [Y/n] " ans
+    [[ "${ans,,}" != "n" ]] && reboot
+    exit 0
+}
+
+# =============================================================================
+#  Adafruit Voice Bonnet driver install (wm8960-soundcard dtoverlay)
+#
+#  The wm8960-soundcard overlay ships with Raspberry Pi OS — no compilation
+#  needed. Just add it to config.txt and reboot.
+# =============================================================================
+_install_voice_bonnet_driver() {
+    hr; banner "  Adafruit Voice Bonnet — Driver Install"; hr; echo ""
+
+    if aplay -l 2>/dev/null | grep -qi "wm8960soundcard\|wm8960-soundcard"; then
+        info "Voice Bonnet (wm8960-soundcard) already detected"
+        return 0
+    fi
+
+    # The overlay ships with Pi OS firmware — verify it's present
+    local OVERLAY_FILE="/boot/firmware/overlays/wm8960-soundcard.dtbo"
+    if [[ ! -f "$OVERLAY_FILE" ]]; then
+        err "wm8960-soundcard overlay not found at $OVERLAY_FILE.
+  This overlay ships with Raspberry Pi OS firmware. Ensure your firmware is
+  up to date and try again:
+    sudo apt-get update && sudo apt-get full-upgrade"
+    fi
+
+    log "Enabling wm8960-soundcard overlay in /boot/firmware/config.txt..."
+    if ! grep -q "dtoverlay=wm8960-soundcard" /boot/firmware/config.txt; then
+        echo "dtoverlay=wm8960-soundcard" >> /boot/firmware/config.txt
+        info "Overlay added to config.txt"
+    else
+        info "Overlay already in config.txt"
+    fi
+
+    # Enable I2C — required for WM8960 codec control
+    if ! grep -q "^dtparam=i2c_arm=on" /boot/firmware/config.txt; then
+        echo "dtparam=i2c_arm=on" >> /boot/firmware/config.txt
+    fi
+
+    echo ""
+    warn "REBOOT REQUIRED before the Voice Bonnet will be detected."
+    echo ""
+    echo "  After rebooting, run the install again:"
+    echo "    sudo bash $0"
+    echo ""
+    echo "  The driver will be detected on the second run and"
+    echo "  the LVA install will complete automatically."
+    echo ""
+
+    # Mark that we need a reboot (include HARDWARE so post-reboot check knows)
+    printf "REBOOT_PENDING=true\nHARDWARE=voice_bonnet\n" > "$INSTALL_MARKER"
 
     read -r -p "  Reboot now? [Y/n] " ans
     [[ "${ans,,}" != "n" ]] && reboot
@@ -933,16 +997,33 @@ fi
 #  Check for pending reboot from 2-Mic HAT driver install
 # =============================================================================
 if [[ -f "$INSTALL_MARKER" ]] && grep -q "REBOOT_PENDING=true" "$INSTALL_MARKER"; then
-    # Check if the driver is now detected post-reboot
-    if aplay -l 2>/dev/null | grep -qi "seeed2micvoicec"; then
-        info "2-Mic HAT detected after reboot — continuing install"
-        rm -f "$INSTALL_MARKER"
-    else
-        err "2-Mic HAT still not detected after reboot.
+    PENDING_HW=$(grep "^HARDWARE=" "$INSTALL_MARKER" 2>/dev/null | cut -d= -f2)
+    case "$PENDING_HW" in
+        voice_bonnet)
+            if aplay -l 2>/dev/null | grep -qi "wm8960soundcard\|wm8960-soundcard"; then
+                info "Voice Bonnet detected after reboot — continuing install"
+                rm -f "$INSTALL_MARKER"
+                VOICE_HARDWARE="voice_bonnet"
+            else
+                err "Voice Bonnet not detected after reboot.
+  Check that the HAT is seated correctly on the GPIO pins.
+  Run: aplay -l   to see what audio devices are present.
+  Run: dmesg | grep -i wm8960  to check for driver errors."
+            fi
+            ;;
+        *)
+            # Default: 2mic_hat (marker predates HARDWARE field)
+            if aplay -l 2>/dev/null | grep -qi "seeed2micvoicec"; then
+                info "2-Mic HAT detected after reboot — continuing install"
+                rm -f "$INSTALL_MARKER"
+            else
+                err "2-Mic HAT still not detected after reboot.
   Check that the HAT is seated correctly on the GPIO pins.
   Run: aplay -l   to see what audio devices are present.
   Run: dmesg | grep -i seeed  to check for driver errors."
-    fi
+            fi
+            ;;
+    esac
 fi
 
 # =============================================================================
@@ -997,9 +1078,27 @@ if [[ "$VOICE_HARDWARE" == "auto" ]]; then
     fi
 fi
 
-# ── Step 2: 2-Mic HAT driver install (if needed) ──────────────────────────────
+# ── Step 2: HAT driver install (if needed) ────────────────────────────────────
 if [[ "$ACTUAL_HW" == "2mic_hat" ]]; then
     _install_2mic_driver
+
+    # Apply WM8960 mixer init and persist via alsa-restore.service.
+    # On first boot after driver install the ALSA state file has no seeed entry;
+    # alsa-restore.service can only restore what it previously saved.  We apply
+    # the Seeed-provided baseline state here and run alsactl store so every
+    # subsequent boot restores correctly without a separate init service.
+    SEEED_STATE="$VOICE_HOME/seeed-linux-dtoverlays/extras/wm8960_asound.state"
+    SEEED_CARD=$(aplay -l 2>/dev/null | grep -i seeed2micvoicec | grep -oP 'card \K[0-9]+' | head -1)
+    if [[ -f "$SEEED_STATE" ]] && [[ -n "$SEEED_CARD" ]]; then
+        if alsactl restore "$SEEED_CARD" -f "$SEEED_STATE" 2>/dev/null; then
+            alsactl store "$SEEED_CARD" 2>/dev/null || true
+            info "WM8960 mixer initialized and saved (card $SEEED_CARD)"
+        else
+            warn "Could not apply WM8960 mixer state — run --detect if mic is silent"
+        fi
+    fi
+elif [[ "$ACTUAL_HW" == "voice_bonnet" ]]; then
+    _install_voice_bonnet_driver
 fi
 
 # ── Step 3: System dependencies ───────────────────────────────────────────────
@@ -1065,6 +1164,17 @@ hr; banner "  Step 2/7 — User session setup"; hr; echo ""
 loginctl enable-linger "$VOICE_USER" 2>/dev/null || true
 info "Linger enabled for $VOICE_USER — service will start on boot"
 
+# Start the user's systemd session now (linger doesn't do this immediately)
+XDG_RUNTIME_DIR="/run/user/$(id -u "$VOICE_USER")"
+export XDG_RUNTIME_DIR
+# Start PipeWire user services so the audio socket exists before LVA installs
+if sudo -u "$VOICE_USER" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" systemctl --user enable pipewire pipewire-pulse wireplumber 2>/dev/null; then
+    sudo -u "$VOICE_USER" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" systemctl --user start pipewire pipewire-pulse wireplumber 2>/dev/null || true
+    info "PipeWire user services enabled and started"
+else
+    warn "Could not enable PipeWire user services — audio may not work until reboot"
+fi
+
 # ── Step 5: Clone LVA ─────────────────────────────────────────────────────────
 hr; banner "  Step 3/7 — Clone linux-voice-assistant"; hr; echo ""
 
@@ -1120,7 +1230,7 @@ LVA_MIC=${RESOLVED_MIC}
 LVA_SPK=${RESOLVED_SPK}
 LVA_WAKE_WORD=${VOICE_WAKE_WORD}
 LVA_DIR=${LVA_DIR}
-PULSE_RUNTIME_PATH=/run/user/$(id -u "$VOICE_USER")
+PULSE_RUNTIME_PATH=/run/user/$(id -u "$VOICE_USER")/pulse
 PULSE_COOKIE=${VOICE_HOME}/.config/pulse/cookie
 ENVEOF
 chmod 640 "$ENV_FILE"
@@ -1178,7 +1288,7 @@ RestartSec=15
 StandardOutput=journal
 StandardError=journal
 # Ensure PulseAudio environment is set for the user
-Environment=PULSE_RUNTIME_PATH=/run/user/${VOICE_UID}
+Environment=PULSE_RUNTIME_PATH=/run/user/${VOICE_UID}/pulse
 Environment=XDG_RUNTIME_DIR=/run/user/${VOICE_UID}
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${VOICE_UID}/bus
 

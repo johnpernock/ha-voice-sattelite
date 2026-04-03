@@ -83,7 +83,7 @@ State colors: dim blue = idle, green = wake word, amber = processing, cyan = TTS
 
 ## Active hardware — VoicePi4
 
-- **Pi 4**, hostname `VoicePi4`, IP `192.168.1.191`, user `pi`
+- **Pi Zero 2W**, hostname `VoicePi4`, IP `192.168.1.191`, user `pi`
 - **HAT:** ReSpeaker 2-Mic Pi HAT **V1.0** (NOT V2 — the overlay name and driver differ)
 - **Speaker:** Single speaker wired to HAT speaker screw terminals
 - **OS:** Debian 13 Trixie, **PipeWire 1.4.2** + WirePlumber (PulseAudio removed)
