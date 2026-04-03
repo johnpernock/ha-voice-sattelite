@@ -15,6 +15,7 @@ Designed as a companion to [ha-pi-smarthome](https://github.com/johnpernock/ha-p
 - **Local wake word detection** — okay_nabu, hey_jarvis, or alexa built-in via OHF LVA
 - **systemd service** — starts on boot, auto-restarts on failure, logs to journald
 - **Simple flags** — `--detect`, `--status`, `--update`, `--reset`
+- **Onboard LEDs disabled** — activity and power LEDs turned off in `config.txt` during install (takes effect after reboot)
 
 ---
 

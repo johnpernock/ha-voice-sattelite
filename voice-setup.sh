@@ -1033,6 +1033,32 @@ usermod -a -G audio "$VOICE_USER" 2>/dev/null || true
 
 info "Dependencies installed"
 
+# ── Step 3b: Disable onboard LEDs ─────────────────────────────────────────────
+RASPI_CONFIG_FILE=/boot/firmware/config.txt
+[[ ! -f "$RASPI_CONFIG_FILE" ]] && RASPI_CONFIG_FILE=/boot/config.txt
+
+if [[ -f "$RASPI_CONFIG_FILE" ]]; then
+    LED_ADDED=false
+    for led_param in \
+        "dtparam=act_led_trigger=none" \
+        "dtparam=act_led_activelow=off" \
+        "dtparam=pwr_led_trigger=none" \
+        "dtparam=pwr_led_activelow=off"
+    do
+        if ! grep -q "^${led_param}" "$RASPI_CONFIG_FILE"; then
+            echo "$led_param" >> "$RASPI_CONFIG_FILE"
+            LED_ADDED=true
+        fi
+    done
+    if $LED_ADDED; then
+        log "Onboard LEDs disabled in config.txt (takes effect after reboot)"
+    else
+        log "Onboard LEDs already disabled in config.txt"
+    fi
+else
+    warn "config.txt not found — skipping LED disable"
+fi
+
 # ── Step 4: Enable lingering (run services without login) ─────────────────────
 hr; banner "  Step 2/7 — User session setup"; hr; echo ""
 
