@@ -90,7 +90,7 @@ State colors: dim blue = idle, green = wake word, amber = processing, cyan = TTS
 | Pi Zero 2W | `PiVoice3` | `192.168.1.190` | `pi` | ReSpeaker 2-Mic HAT V1.0 | `family-room-satellite` |
 | Pi Zero 2W | `PiVoice1` | `192.168.1.192` | `pi` | ReSpeaker 2-Mic HAT V1.0 | `solarium-satellite` |
 | Pi 4 | `PiVoice4` | `192.168.1.198` | `johnpernock` | ReSpeaker 2-Mic HAT V1.0 | `kitchen-satellite` |
-| Pi Zero 2W | `PiVoice5` | TBD | `johnpernock` | Adafruit Voice Bonnet | `voice-bonnet-test` |
+| Pi Zero 2W | `PiVoice5` | `192.168.1.196` | `johnpernock` | Adafruit Voice Bonnet | `office-satellite` |
 
 All run Debian 13 Trixie, PipeWire + WirePlumber. HA at `http://192.168.1.149:8123`.
 
