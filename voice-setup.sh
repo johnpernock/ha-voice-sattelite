@@ -766,6 +766,111 @@ LEDSVCEOF
 }
 
 # =============================================================================
+#  Voice Bonnet LED service (8 WS2812B NeoPixels on GPIO 18)
+# =============================================================================
+_install_bonnet_led_service() {
+    local LED_SCRIPT="$LVA_DIR/lva_bonnet_leds.py"
+    local LED_SERVICE_FILE="/etc/systemd/system/lva-bonnet-leds.service"
+    local LED_API_PORT=2702
+    local LED_CFG_FILE="/etc/lva-leds.json"
+
+    log "Installing LED feedback service for Voice Bonnet..."
+
+    # rpi_ws281x requires root for DMA/PWM; install system-wide
+    # On Trixie, pip module is under python3 and needs --break-system-packages
+    apt-get install -y python3-pip --no-install-recommends -qq 2>/dev/null || true
+    pip install rpi_ws281x --break-system-packages --quiet 2>/dev/null || \
+        pip3 install rpi_ws281x --break-system-packages --quiet 2>/dev/null || true
+
+    # Install lgpio for button (same as 2-Mic HAT)
+    "$LVA_DIR/.venv/bin/pip" install lgpio --quiet 2>/dev/null || true
+
+    # Write LED color/brightness config from LED_* voice.conf variables
+    IFS=' ' read -r _dr _dg _db <<< "${LED_COLOR_DETECT:-0 0 100}"
+    IFS=' ' read -r _wr _wg _wb <<< "${LED_COLOR_WAKE:-0 255 0}"
+    IFS=' ' read -r _lr _lg _lb <<< "${LED_COLOR_LISTENING:-0 0 200}"
+    IFS=' ' read -r _pr _pg _pb <<< "${LED_COLOR_PROCESSING:-150 75 0}"
+    IFS=' ' read -r _sr _sg _sb <<< "${LED_COLOR_SPEAKING:-0 100 100}"
+    IFS=' ' read -r _mr _mg _mb <<< "${LED_COLOR_MUTED:-200 0 0}"
+    IFS=' ' read -r _er _eg _eb <<< "${LED_COLOR_ERROR:-200 0 0}"
+    cat > "$LED_CFG_FILE" << CFGJSON
+{
+  "colors": {
+    "detect":     [${_dr:-0}, ${_dg:-0}, ${_db:-100}],
+    "wake":       [${_wr:-0}, ${_wg:-255}, ${_wb:-0}],
+    "listening":  [${_lr:-0}, ${_lg:-0}, ${_lb:-200}],
+    "processing": [${_pr:-150}, ${_pg:-75}, ${_pb:-0}],
+    "speaking":   [${_sr:-0}, ${_sg:-100}, ${_sb:-100}],
+    "muted":      [${_mr:-200}, ${_mg:-0}, ${_mb:-0}],
+    "error":      [${_er:-200}, ${_eg:-0}, ${_eb:-0}]
+  },
+  "brightness": {
+    "detect":     ${LED_BRIGHTNESS_DETECT:-4},
+    "wake":       ${LED_BRIGHTNESS_WAKE:-20},
+    "listening":  ${LED_BRIGHTNESS_LISTENING:-15},
+    "processing": ${LED_BRIGHTNESS_PROCESSING:-10},
+    "speaking":   ${LED_BRIGHTNESS_SPEAKING:-15},
+    "muted":      ${LED_BRIGHTNESS_MUTED:-1},
+    "error":      ${LED_BRIGHTNESS_ERROR:-15}
+  },
+  "button": {
+    "enabled":         ${VOICE_ENABLE_BUTTON:-true},
+    "gpio":            ${BUTTON_GPIO:-17},
+    "press_threshold": ${BUTTON_PRESS_THRESHOLD:-0.20}
+  }
+}
+CFGJSON
+    chmod 644 "$LED_CFG_FILE"
+    log "LED config written to $LED_CFG_FILE"
+
+    # Deploy LED script from repo if available, otherwise error
+    if [[ -f "$SCRIPT_DIR/lva_bonnet_leds.py" ]]; then
+        cp "$SCRIPT_DIR/lva_bonnet_leds.py" "$LED_SCRIPT"
+        chmod +x "$LED_SCRIPT"
+        chown root:root "$LED_SCRIPT"
+        log "Deployed lva_bonnet_leds.py from repo"
+    else
+        warn "lva_bonnet_leds.py not found in repo — LED service not installed"
+        warn "Re-run after: git pull"
+        return 1
+    fi
+
+    # Systemd service — runs as root for DMA (NeoPixel PWM) + journal access
+    cat > "$LED_SERVICE_FILE" << LEDSVCEOF
+[Unit]
+Description=LVA Voice Bonnet LED Control
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 ${LED_SCRIPT}
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+LEDSVCEOF
+
+    systemctl daemon-reload
+    systemctl enable lva-bonnet-leds.service
+    systemctl restart lva-bonnet-leds.service 2>/dev/null || true
+
+    info "LED service installed — 8 NeoPixels will show satellite state"
+    log "  Dim blue  = idle/waiting for wake word"
+    log "  Green     = wake word detected"
+    log "  Blue      = listening / streaming to HA"
+    log "  Amber     = processing (STT/response)"
+    log "  Cyan      = speaking TTS response"
+    log "  Red dim   = muted"
+    log "  Red       = error (clears after 2s)"
+    info "LED API running on port ${LED_API_PORT}"
+    log "  POST http://$(hostname -I | awk '{print \$1}'):${LED_API_PORT}/leds/off  (night)"
+    log "  POST http://$(hostname -I | awk '{print \$1}'):${LED_API_PORT}/leds/on   (day)"
+}
+
+# =============================================================================
 #  --detect — show audio devices
 # =============================================================================
 if [[ "$1" == "--detect" ]]; then
@@ -1099,16 +1204,45 @@ if [[ "$ACTUAL_HW" == "2mic_hat" ]]; then
     fi
 elif [[ "$ACTUAL_HW" == "voice_bonnet" ]]; then
     _install_voice_bonnet_driver
-    # Route DAC output to speaker — these default to off on the WM8960
+    # WM8960 mixer init — several critical controls default to off/zero
     BONNET_CARD=$(aplay -l 2>/dev/null | grep -i wm8960 | awk -F'[: ]' '{print $3}' | head -1)
     if [[ -n "$BONNET_CARD" ]]; then
+        # Output: route DAC to speaker amplifier (default off)
         amixer -c "$BONNET_CARD" sset 'Left Output Mixer PCM'  on  &>/dev/null
         amixer -c "$BONNET_CARD" sset 'Right Output Mixer PCM' on  &>/dev/null
-        amixer -c "$BONNET_CARD" sset 'Speaker' 90%               &>/dev/null
+        # Output: speaker amplifier boost (DC and AC both default to 0 = very faint)
+        amixer -c "$BONNET_CARD" cset numid=15 5 &>/dev/null   # Speaker DC Volume → max
+        amixer -c "$BONNET_CARD" cset numid=16 5 &>/dev/null   # Speaker AC Volume → max
+        amixer -c "$BONNET_CARD" cset numid=13 117,117 &>/dev/null  # Speaker Playback Volume
+        amixer -c "$BONNET_CARD" cset numid=10 255,255 &>/dev/null  # DAC Playback Volume → max
+        # Input: connect mic preamp to ADC (default off = silent mic)
+        amixer -c "$BONNET_CARD" sset 'Left Input Mixer Boost'  on  &>/dev/null
+        amixer -c "$BONNET_CARD" sset 'Right Input Mixer Boost' on  &>/dev/null
+        amixer -c "$BONNET_CARD" sset 'Left Input Boost Mixer LINPUT1'  3 &>/dev/null
+        amixer -c "$BONNET_CARD" sset 'Right Input Boost Mixer RINPUT1' 3 &>/dev/null
         alsactl store &>/dev/null
-        log "WM8960 speaker mixer initialized and saved (card $BONNET_CARD)"
+        log "WM8960 speaker + mic mixer initialized and saved (card $BONNET_CARD)"
+
+        # Set PipeWire software sink volume to 60% (ALSA amp at full is very loud)
+        # Also write WirePlumber config so this persists across reboots
+        mkdir -p "$VOICE_HOME/.config/wireplumber/main.lua.d"
+        cat > "$VOICE_HOME/.config/wireplumber/main.lua.d/50-alsa-config.lua" << 'WPLUA'
+rule = {
+  matches = {
+    {
+      { "node.name", "equals", "alsa_output.platform-soc_sound.stereo-fallback" },
+    },
+  },
+  apply_properties = {
+    ["node.volume"] = 0.6,
+  },
+}
+table.insert(alsa_monitor.rules, rule)
+WPLUA
+        chown -R "$VOICE_USER:$VOICE_USER" "$VOICE_HOME/.config/wireplumber"
+        log "WirePlumber default sink volume set to 60%"
     else
-        warn "Could not find wm8960soundcard — run --detect if speaker is silent"
+        warn "Could not find wm8960soundcard — run --detect if speaker or mic is silent"
     fi
 fi
 
@@ -1324,6 +1458,9 @@ fi
 # ── Step 7b: LED service (2-Mic HAT only) ────────────────────────────────────
 if [[ "$ACTUAL_HW" == "2mic_hat" ]] && [[ "${VOICE_ENABLE_LEDS:-true}" == "true" ]]; then
     _install_led_service
+fi
+if [[ "$ACTUAL_HW" == "voice_bonnet" ]] && [[ "${VOICE_ENABLE_LEDS:-true}" == "true" ]]; then
+    _install_bonnet_led_service
 fi
 
 hr; banner "  Step 7/7 — Finalizing"; hr; echo ""
