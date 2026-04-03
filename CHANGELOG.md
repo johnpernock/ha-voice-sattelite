@@ -4,6 +4,24 @@ All notable changes to this project are documented here.
 
 ---
 
+## [1.7.0] — 2026-04-03
+
+### Added
+
+**kitchen-satellite** — Pi 4 at 192.168.1.198 (`PiVoice4`, user `johnpernock`) set up as `kitchen-satellite` with ReSpeaker 2-Mic HAT V1.0. All standard patches applied: SIGUSR1/SIGUSR2 signal handlers, `okay_nabu.json` probability_cutoff → 0.30, `lva-2mic-leds.service`.
+
+### Changed
+
+**Satellite renames** — four satellites renamed to reflect physical locations:
+- `office-satellite` (VoicePi4, 192.168.1.191) → `bedroom-satellite`
+- `dining-room-satellite` (PiVoice1, 192.168.1.192) → `solarium-satellite`
+- `voice-bonnet-test` (PiVoice5, 192.168.1.196) → `office-satellite`
+- New: `kitchen-satellite` (PiVoice4, 192.168.1.198) — Pi 4 with ReSpeaker HAT
+
+**CLAUDE.md hardware table** updated with all 5 active satellites and corrected satellite names.
+
+---
+
 ## [1.6.0] — 2026-04-03
 
 ### Added
