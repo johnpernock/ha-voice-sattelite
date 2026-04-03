@@ -405,6 +405,95 @@ _install_2mic_driver() {
 #  The wm8960-soundcard overlay ships with Raspberry Pi OS — no compilation
 #  needed. Just add it to config.txt and reboot.
 # =============================================================================
+# =============================================================================
+#  WM8960 mixer init service — persists critical ALSA settings across reboots
+#
+#  The WM8960 codec resets several controls to off/zero on every boot:
+#   - Output Mixer PCM switches (DAC → speaker amp path)
+#   - Speaker DC/AC boost (class-D amp gain — zero means very faint output)
+#   - Input Mixer Boost switches (mic preamp → ADC path — off means silent mic)
+#
+#  This service runs after sound.target and re-applies all settings so the
+#  bonnet works correctly without manual amixer commands after every reboot.
+# =============================================================================
+_install_wm8960_mixer_service() {
+    local MIXER_SCRIPT="/usr/local/bin/wm8960-mixer-init.sh"
+    local MIXER_SVC="/etc/systemd/system/wm8960-mixer-init.service"
+
+    log "Installing WM8960 mixer init service..."
+
+    cat > "$MIXER_SCRIPT" << 'MIXEOF'
+#!/bin/bash
+# WM8960 mixer init — re-apply capture and output settings on every boot.
+CARD=$(aplay -l 2>/dev/null | grep -i wm8960 | grep -oP 'card \K[0-9]+' | head -1)
+if [[ -z "$CARD" ]]; then
+    echo "[wm8960-mixer-init] wm8960soundcard not found — skipping"
+    exit 0
+fi
+echo "[wm8960-mixer-init] Initializing WM8960 on card $CARD..."
+
+# Output: route DAC to speaker amplifier (default off)
+amixer -c "$CARD" sset 'Left Output Mixer PCM'  on >/dev/null
+amixer -c "$CARD" sset 'Right Output Mixer PCM' on >/dev/null
+# Output: speaker amp boost (DC and AC both default to 0 = very faint)
+amixer -c "$CARD" cset numid=15 5     >/dev/null  # Speaker DC Volume → max
+amixer -c "$CARD" cset numid=16 5     >/dev/null  # Speaker AC Volume → max
+amixer -c "$CARD" cset numid=13 117,117 >/dev/null # Speaker Playback Volume
+amixer -c "$CARD" cset numid=10 255,255 >/dev/null # DAC Playback Volume → max
+# Input: connect mic preamp to ADC (default off = silent mic)
+amixer -c "$CARD" cset numid=50 1     >/dev/null  # Left Input Mixer Boost on
+amixer -c "$CARD" cset numid=51 1     >/dev/null  # Right Input Mixer Boost on
+amixer -c "$CARD" cset numid=9  3     >/dev/null  # Left Input Boost LINPUT1 Volume (29dB)
+amixer -c "$CARD" cset numid=8  3     >/dev/null  # Right Input Boost RINPUT1 Volume (29dB)
+amixer -c "$CARD" cset numid=46 1     >/dev/null  # Left Boost Mixer LINPUT1 Switch on
+amixer -c "$CARD" cset numid=49 1     >/dev/null  # Right Boost Mixer RINPUT1 Switch on
+amixer -c "$CARD" cset numid=1  63,63 >/dev/null  # Capture Volume max
+amixer -c "$CARD" cset numid=3  1,1   >/dev/null  # Capture Switch on
+amixer -c "$CARD" cset numid=36 195,195 >/dev/null # ADC PCM Capture Volume
+
+echo "[wm8960-mixer-init] Done"
+MIXEOF
+    chmod +x "$MIXER_SCRIPT"
+
+    cat > "$MIXER_SVC" << SVEOF
+[Unit]
+Description=WM8960 ALSA mixer initialization
+After=sound.target alsa-restore.service
+Wants=sound.target
+
+[Service]
+Type=oneshot
+ExecStart=$MIXER_SCRIPT
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+SVEOF
+
+    systemctl daemon-reload
+    systemctl enable wm8960-mixer-init.service
+    systemctl start wm8960-mixer-init.service 2>/dev/null || true
+    info "WM8960 mixer init service installed — settings persist across reboots"
+
+    # Set PipeWire software sink to 60% via WirePlumber (amp at full is very loud)
+    mkdir -p "$VOICE_HOME/.config/wireplumber/main.lua.d"
+    cat > "$VOICE_HOME/.config/wireplumber/main.lua.d/50-alsa-config.lua" << 'WPLUA'
+rule = {
+  matches = {
+    {
+      { "node.name", "equals", "alsa_output.platform-soc_sound.stereo-fallback" },
+    },
+  },
+  apply_properties = {
+    ["node.volume"] = 0.6,
+  },
+}
+table.insert(alsa_monitor.rules, rule)
+WPLUA
+    chown -R "$VOICE_USER:$VOICE_USER" "$VOICE_HOME/.config/wireplumber"
+    log "WirePlumber default sink volume set to 60% (amp at full is too loud)"
+}
+
 _install_voice_bonnet_driver() {
     hr; banner "  Adafruit Voice Bonnet — Driver Install"; hr; echo ""
 
@@ -1204,46 +1293,7 @@ if [[ "$ACTUAL_HW" == "2mic_hat" ]]; then
     fi
 elif [[ "$ACTUAL_HW" == "voice_bonnet" ]]; then
     _install_voice_bonnet_driver
-    # WM8960 mixer init — several critical controls default to off/zero
-    BONNET_CARD=$(aplay -l 2>/dev/null | grep -i wm8960 | awk -F'[: ]' '{print $3}' | head -1)
-    if [[ -n "$BONNET_CARD" ]]; then
-        # Output: route DAC to speaker amplifier (default off)
-        amixer -c "$BONNET_CARD" sset 'Left Output Mixer PCM'  on  &>/dev/null
-        amixer -c "$BONNET_CARD" sset 'Right Output Mixer PCM' on  &>/dev/null
-        # Output: speaker amplifier boost (DC and AC both default to 0 = very faint)
-        amixer -c "$BONNET_CARD" cset numid=15 5 &>/dev/null   # Speaker DC Volume → max
-        amixer -c "$BONNET_CARD" cset numid=16 5 &>/dev/null   # Speaker AC Volume → max
-        amixer -c "$BONNET_CARD" cset numid=13 117,117 &>/dev/null  # Speaker Playback Volume
-        amixer -c "$BONNET_CARD" cset numid=10 255,255 &>/dev/null  # DAC Playback Volume → max
-        # Input: connect mic preamp to ADC (default off = silent mic)
-        amixer -c "$BONNET_CARD" sset 'Left Input Mixer Boost'  on  &>/dev/null
-        amixer -c "$BONNET_CARD" sset 'Right Input Mixer Boost' on  &>/dev/null
-        amixer -c "$BONNET_CARD" sset 'Left Input Boost Mixer LINPUT1'  3 &>/dev/null
-        amixer -c "$BONNET_CARD" sset 'Right Input Boost Mixer RINPUT1' 3 &>/dev/null
-        alsactl store &>/dev/null
-        log "WM8960 speaker + mic mixer initialized and saved (card $BONNET_CARD)"
-
-        # Set PipeWire software sink volume to 60% (ALSA amp at full is very loud)
-        # Also write WirePlumber config so this persists across reboots
-        mkdir -p "$VOICE_HOME/.config/wireplumber/main.lua.d"
-        cat > "$VOICE_HOME/.config/wireplumber/main.lua.d/50-alsa-config.lua" << 'WPLUA'
-rule = {
-  matches = {
-    {
-      { "node.name", "equals", "alsa_output.platform-soc_sound.stereo-fallback" },
-    },
-  },
-  apply_properties = {
-    ["node.volume"] = 0.6,
-  },
-}
-table.insert(alsa_monitor.rules, rule)
-WPLUA
-        chown -R "$VOICE_USER:$VOICE_USER" "$VOICE_HOME/.config/wireplumber"
-        log "WirePlumber default sink volume set to 60%"
-    else
-        warn "Could not find wm8960soundcard — run --detect if speaker or mic is silent"
-    fi
+    _install_wm8960_mixer_service
 fi
 
 # ── Step 3: System dependencies ───────────────────────────────────────────────

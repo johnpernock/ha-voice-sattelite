@@ -4,6 +4,39 @@ All notable changes to this project are documented here.
 
 ---
 
+## [1.6.0] — 2026-04-03
+
+### Added
+
+**Adafruit Voice Bonnet support** — full `voice_bonnet` hardware type.
+
+**`lva_bonnet_leds.py`** — new LED service for the Voice Bonnet's 3 DotStar (APA102) RGB LEDs:
+- Bit-bang APA102 driver via `lgpio` on GPIO 5 (data) / GPIO 6 (clock) — no `spidev` required
+- Same journal watcher, state colors, and HTTP API as `lva_2mic_leds.py`
+- Button watcher on GPIO 17 with WM8960 IRQ filter (200ms threshold), same as 2-Mic HAT
+- Installed as `lva-bonnet-leds.service` (runs as root for GPIO access)
+
+**`_install_wm8960_mixer_service()`** — systemd `wm8960-mixer-init.service` that re-applies all critical WM8960 ALSA controls on every boot:
+- Output path: `Left/Right Output Mixer PCM` on, Speaker DC/AC boost → max (5), Speaker Playback Volume 117, DAC Playback Volume 255
+- Input path: `Left/Right Input Mixer Boost` on, LINPUT1/RINPUT1 boost volume 3 (29dB), Capture Volume 63, Capture Switch on, ADC PCM Capture Volume 195
+- Without this service, both mic and speaker revert to broken defaults after every reboot
+- WirePlumber `50-alsa-config.lua` sets default sink to 60% (amp at full is uncomfortably loud)
+
+### Fixed
+
+**SIGUSR1 killing LVA** — the button watcher sends `SIGUSR1` to toggle mute, but LVA's default SIGUSR1 handler terminates the process. The `voice-setup.sh` installer now patches `linux_voice_assistant/__main__.py` with proper signal handlers on `voice_bonnet` installs (same patches as applied manually on VoicePi4).
+
+**`BONNET_CARD` detection** — replaced broken `awk -F'[: ]' '{print $3}'` with `grep -oP 'card \K[0-9]+'` throughout.
+
+### Documented
+
+**WM8960 Voice Bonnet mixer map** (why each control matters):
+- `Input Mixer Boost` off by default → mic preamp disconnected from ADC → completely silent mic
+- `Speaker DC/AC Volume` at 0 by default → class-D amp barely amplifying → very faint speaker
+- `Output Mixer PCM` off by default → DAC not routed to speaker → no audio output
+
+---
+
 ## [1.5.0] — 2026-04-02
 
 ### Updated

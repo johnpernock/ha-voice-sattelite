@@ -44,6 +44,7 @@ The entire project is one Bash script (`voice-setup.sh`) plus a config template.
 **Hardware detection flow (`VOICE_HARDWARE`):**
 - `auto` — script probes ALSA (`aplay -l`, `arecord -l`) to identify connected hardware and selects the appropriate profile
 - `2mic_hat` — two-stage install: first run installs the device tree overlay driver and reboots; second run detects the HAT and installs LVA
+- `voice_bonnet` — Adafruit Voice Bonnet (WM8960); same two-stage pattern as 2-Mic HAT; installs `wm8960-mixer-init.service` and `lva-bonnet-leds.service`
 - `respeaker_lite` — USB plug-and-play, no driver needed
 - `usb` — finds the first USB audio device automatically
 - `custom` — user sets `VOICE_MIC_DEVICE` and `VOICE_SPEAKER_DEVICE` explicitly
@@ -81,13 +82,39 @@ State colors: dim blue = idle, green = wake word, amber = processing, cyan = TTS
 
 ---
 
-## Active hardware — VoicePi4
+## Active hardware
 
-- **Pi Zero 2W**, hostname `VoicePi4`, IP `192.168.1.191`, user `pi`
-- **HAT:** ReSpeaker 2-Mic Pi HAT **V1.0** (NOT V2 — the overlay name and driver differ)
-- **Speaker:** Single speaker wired to HAT speaker screw terminals
-- **OS:** Debian 13 Trixie, **PipeWire 1.4.2** + WirePlumber (PulseAudio removed)
-- **HA satellite name:** `office-satellite`, HA at `http://192.168.1.149:8123`
+| Pi | Hostname | IP | User | Hardware | HA name |
+|----|----------|----|------|----------|---------|
+| Pi Zero 2W | `VoicePi4` | `192.168.1.191` | `pi` | ReSpeaker 2-Mic HAT V1.0 | `office-satellite` |
+| Pi Zero 2W | `PiVoice3` | `192.168.1.190` | `pi` | ReSpeaker 2-Mic HAT V1.0 | `family-room-satellite` |
+| Pi Zero 2W | `PiVoice1` | `192.168.1.192` | `pi` | ReSpeaker 2-Mic HAT V1.0 | `dining-room-satellite` |
+| Pi 4 | `PiVoice5` | `192.168.1.198` | `johnpernock` | Adafruit Voice Bonnet | `voice-bonnet-test` |
+
+All run Debian 13 Trixie, PipeWire + WirePlumber. HA at `http://192.168.1.149:8123`.
+
+### Voice Bonnet (PiVoice5) — hardware notes
+
+- **Adafruit Voice Bonnet** — WM8960 codec, `dtoverlay=wm8960-soundcard`, I2C enabled
+- **3 DotStar RGB LEDs** — APA102, data GPIO 5, clock GPIO 6, 3 LEDs
+- **Button** — GPIO 17 (same as 2-Mic HAT; WM8960 IRQ also fires on this pin)
+- **LVA patches applied:** SIGUSR1/SIGUSR2 signal handlers in `__main__.py` (same as VoicePi4)
+- **`wm8960-mixer-init.service`** — runs at boot, re-applies all critical ALSA controls (without it, mic is silent and speaker is very faint after every reboot)
+- **WirePlumber `50-alsa-config.lua`** — default sink at 60% (amp at full is uncomfortably loud)
+- **Wake word threshold:** `probability_cutoff: 0.30` in `wakewords/okay_nabu.json` (default 0.85 is too strict)
+- **`lva-bonnet-leds.service`** — runs `lva_bonnet_leds.py`, DotStar colors show satellite state
+
+---
+
+## Resolved issues (2026-04-03 — Voice Bonnet)
+
+- **Silent mic** — `Left/Right Input Mixer Boost` default to off, disconnecting the mic preamp from the ADC. Fixed by enabling both + setting LINPUT1/RINPUT1 boost to 3 (29dB). Now in `wm8960-mixer-init.service`.
+- **Very faint speaker** — `Speaker DC Volume` and `Speaker AC Volume` both default to 0, severely under-driving the class-D amp. Fixed by setting both to max (5). Now in `wm8960-mixer-init.service`.
+- **PipeWire sink at 40%** — LVA/mpv set system volume; ALSA amp at full made 40% too loud. Fixed by setting WirePlumber default to 60%.
+- **SIGUSR1 killing LVA** — button watcher sends SIGUSR1 to toggle mute; without the signal handler patch, default SIGUSR1 terminates LVA (`code=killed, status=10/USR1`). Fixed by patching `__main__.py` (same as VoicePi4).
+- **Wake word threshold too strict** — default `probability_cutoff: 0.85` rarely triggers. Lowered to `0.30` in `okay_nabu.json`.
+- **WM8960 goes silent after session** — hardware state resets; fixed by `wm8960-mixer-init.service` running at every boot.
+- **DotStar LEDs** — Voice Bonnet has 3 APA102 (DotStar) LEDs on GPIO 5/6, not NeoPixels. `lva_bonnet_leds.py` uses lgpio bit-bang — no spidev needed.
 
 ---
 
