@@ -86,15 +86,15 @@ State colors: dim blue = idle, green = wake word, amber = processing, cyan = TTS
 
 | Pi | Hostname | IP | User | Hardware | HA name |
 |----|----------|----|------|----------|---------|
-| Pi Zero 2W | `VoicePi4` | `192.168.1.191` | `pi` | ReSpeaker 2-Mic HAT V1.0 | `bedroom-satellite` |
-| Pi Zero 2W | `PiVoice3` | `192.168.1.190` | `pi` | ReSpeaker 2-Mic HAT V1.0 | `family-room-satellite` |
-| Pi Zero 2W | `PiVoice1` | `192.168.1.192` | `pi` | ReSpeaker 2-Mic HAT V1.0 | `solarium-satellite` |
-| Pi 4 | `PiVoice4` | `192.168.1.198` | `johnpernock` | ReSpeaker 2-Mic HAT V1.0 | `kitchen-satellite` |
-| Pi Zero 2W | `PiVoice5` | `192.168.1.196` | `johnpernock` | Adafruit Voice Bonnet | `office-satellite` |
+| Pi Zero 2W | `VoicePi4` | `192.168.1.150` | `pi` | ReSpeaker 2-Mic HAT V1.0 | `bedroom-satellite` |
+| Pi Zero 2W | `VoicePiFamilyRoom` | `192.168.1.152` | `pi` | ReSpeaker 2-Mic HAT V1.0 | `family-room-satellite` |
+| Pi Zero 2W | `PiVoiceSolarium` | `192.168.1.151` | `pi` | ReSpeaker 2-Mic HAT V1.0 | `solarium-satellite` |
+| Pi 4 | `VoicePiKitchen` | `192.168.1.153` | `johnpernock` | ReSpeaker 2-Mic HAT V1.0 | `kitchen-satellite` |
+| Pi Zero 2W | `VoicePiOffice` | `192.168.1.154` | `johnpernock` | Adafruit Voice Bonnet | `office-satellite` |
 
 All run Debian 13 Trixie, PipeWire + WirePlumber. HA at `http://192.168.1.149:8123`.
 
-### Voice Bonnet (PiVoice5) — hardware notes
+### Voice Bonnet (VoicePiOffice) — hardware notes
 
 - **Adafruit Voice Bonnet** — WM8960 codec, `dtoverlay=wm8960-soundcard`, I2C enabled
 - **3 DotStar RGB LEDs** — APA102, data GPIO 5, clock GPIO 6, 3 LEDs
