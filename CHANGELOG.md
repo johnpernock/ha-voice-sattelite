@@ -13,8 +13,8 @@ All notable changes to this project are documented here.
 ### Changed
 
 **Satellite renames** — four satellites renamed to reflect physical locations:
-- `office-satellite` (VoicePi4, 192.168.1.150) → `bedroom-satellite`
-- `dining-room-satellite` (PiVoiceSolarium, 192.168.1.151) → `solarium-satellite`
+- `office-satellite` (VoicePiBedroom, 192.168.1.150) → `bedroom-satellite`
+- `dining-room-satellite` (VoicePiSolarium, 192.168.1.151) → `solarium-satellite`
 - `voice-bonnet-test` (VoicePiOffice, 192.168.1.154) → `office-satellite`
 - New: `kitchen-satellite` (VoicePiKitchen, 192.168.1.153) — Pi 4 with ReSpeaker HAT
 
@@ -42,7 +42,7 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
-**SIGUSR1 killing LVA** — the button watcher sends `SIGUSR1` to toggle mute, but LVA's default SIGUSR1 handler terminates the process. The `voice-setup.sh` installer now patches `linux_voice_assistant/__main__.py` with proper signal handlers on `voice_bonnet` installs (same patches as applied manually on VoicePi4).
+**SIGUSR1 killing LVA** — the button watcher sends `SIGUSR1` to toggle mute, but LVA's default SIGUSR1 handler terminates the process. The `voice-setup.sh` installer now patches `linux_voice_assistant/__main__.py` with proper signal handlers on `voice_bonnet` installs (same patches as applied manually on VoicePiBedroom).
 
 **`BONNET_CARD` detection** — replaced broken `awk -F'[: ]' '{print $3}'` with `grep -oP 'card \K[0-9]+'` throughout.
 
@@ -76,7 +76,7 @@ All notable changes to this project are documented here.
 **Expanded button behavior (TODO)** — When TTS is currently playing and the physical button is pressed, the desired behavior is to interrupt speech and restart the listening pipeline rather than toggle mute. Documented in CLAUDE.md under "TODO: Expanded button behavior":
 - Implementation approach outlined (check `_state` variable, call interrupt function in rising-edge handler)
 - Open questions noted: whether LVA exposes a REST endpoint or socket command to cancel mid-stream TTS, or whether `SIGHUP`/service restart is the right approach
-- Not yet implemented — awaiting live testing on VoicePi4 and LVA API investigation
+- Not yet implemented — awaiting live testing on VoicePiBedroom and LVA API investigation
 
 ---
 
@@ -92,7 +92,7 @@ All notable changes to this project are documented here.
 - **`ha-led-config.yaml`** — HA `rest_command` snippets for LED on/off/brightness control and a REST sensor for LED state. Paste into `configuration.yaml` to enable HA automations.
 - **`ha-custom-automation/voice/`** — day/night LED schedule automations (7am on, 10pm off).
 
-### Fixed (VoicePi4 — ReSpeaker 2-Mic HAT V1.0 on Debian Trixie)
+### Fixed (VoicePiBedroom — ReSpeaker 2-Mic HAT V1.0 on Debian Trixie)
 
 - **PipeWire reinstalled** — standalone PulseAudio cannot expose capture for WM8960 (sink and source compete for the device). PipeWire handles full-duplex correctly. LVA now captures mic audio and detects wake word reliably.
 - **`PULSE_RUNTIME_PATH`** must be `/run/user/1000/pulse` (not `/run/user/1000`) — corrected in both `/etc/linux-voice-assistant.env` and the `Environment=` line of the system service unit.

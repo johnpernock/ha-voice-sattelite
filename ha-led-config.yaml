@@ -1,6 +1,6 @@
 # =============================================================================
 #  ha-led-config.yaml
-#  Home Assistant configuration snippets for VoicePi4 LED control.
+#  Home Assistant configuration snippets for VoicePiBedroom LED control.
 #
 #  Replace VOICE_PI_IP with your Pi's IP address (e.g. 192.168.1.191).
 #
@@ -39,7 +39,7 @@ rest_command:
 # =============================================================================
 sensor:
   - platform: rest
-    name: "VoicePi4 LED State"
+    name: "VoicePiBedroom LED State"
     unique_id: voice_pi4_led_state
     resource: "http://VOICE_PI_IP:2702/leds/state"
     value_template: "{{ value_json.leds }}"

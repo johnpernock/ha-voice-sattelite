@@ -86,9 +86,9 @@ State colors: dim blue = idle, green = wake word, amber = processing, cyan = TTS
 
 | Pi | Hostname | IP | User | Hardware | HA name |
 |----|----------|----|------|----------|---------|
-| Pi Zero 2W | `VoicePi4` | `192.168.1.150` | `pi` | ReSpeaker 2-Mic HAT V1.0 | `bedroom-satellite` |
+| Pi Zero 2W | `VoicePiBedroom` | `192.168.1.150` | `pi` | ReSpeaker 2-Mic HAT V1.0 | `bedroom-satellite` |
 | Pi Zero 2W | `VoicePiFamilyRoom` | `192.168.1.152` | `pi` | ReSpeaker 2-Mic HAT V1.0 | `family-room-satellite` |
-| Pi Zero 2W | `PiVoiceSolarium` | `192.168.1.151` | `pi` | ReSpeaker 2-Mic HAT V1.0 | `solarium-satellite` |
+| Pi Zero 2W | `VoicePiSolarium` | `192.168.1.151` | `pi` | ReSpeaker 2-Mic HAT V1.0 | `solarium-satellite` |
 | Pi 4 | `VoicePiKitchen` | `192.168.1.153` | `johnpernock` | ReSpeaker 2-Mic HAT V1.0 | `kitchen-satellite` |
 | Pi Zero 2W | `VoicePiOffice` | `192.168.1.154` | `johnpernock` | Adafruit Voice Bonnet | `office-satellite` |
 
@@ -99,7 +99,7 @@ All run Debian 13 Trixie, PipeWire + WirePlumber. HA at `http://192.168.1.149:81
 - **Adafruit Voice Bonnet** — WM8960 codec, `dtoverlay=wm8960-soundcard`, I2C enabled
 - **3 DotStar RGB LEDs** — APA102, data GPIO 5, clock GPIO 6, 3 LEDs
 - **Button** — GPIO 17 (same as 2-Mic HAT; WM8960 IRQ also fires on this pin)
-- **LVA patches applied:** SIGUSR1/SIGUSR2 signal handlers in `__main__.py` (same as VoicePi4)
+- **LVA patches applied:** SIGUSR1/SIGUSR2 signal handlers in `__main__.py` (same as VoicePiBedroom)
 - **`wm8960-mixer-init.service`** — runs at boot, re-applies all critical ALSA controls (without it, mic is silent and speaker is very faint after every reboot)
 - **WirePlumber `50-alsa-config.lua`** — default sink at 60% (amp at full is uncomfortably loud)
 - **Wake word threshold:** `probability_cutoff: 0.30` in `wakewords/okay_nabu.json` (default 0.85 is too strict)
@@ -112,7 +112,7 @@ All run Debian 13 Trixie, PipeWire + WirePlumber. HA at `http://192.168.1.149:81
 - **Silent mic** — `Left/Right Input Mixer Boost` default to off, disconnecting the mic preamp from the ADC. Fixed by enabling both + setting LINPUT1/RINPUT1 boost to 3 (29dB). Now in `wm8960-mixer-init.service`.
 - **Very faint speaker** — `Speaker DC Volume` and `Speaker AC Volume` both default to 0, severely under-driving the class-D amp. Fixed by setting both to max (5). Now in `wm8960-mixer-init.service`.
 - **PipeWire sink at 40%** — LVA/mpv set system volume; ALSA amp at full made 40% too loud. Fixed by setting WirePlumber default to 60%.
-- **SIGUSR1 killing LVA** — button watcher sends SIGUSR1 to toggle mute; without the signal handler patch, default SIGUSR1 terminates LVA (`code=killed, status=10/USR1`). Fixed by patching `__main__.py` (same as VoicePi4).
+- **SIGUSR1 killing LVA** — button watcher sends SIGUSR1 to toggle mute; without the signal handler patch, default SIGUSR1 terminates LVA (`code=killed, status=10/USR1`). Fixed by patching `__main__.py` (same as VoicePiBedroom).
 - **Wake word threshold too strict** — default `probability_cutoff: 0.85` rarely triggers. Lowered to `0.30` in `okay_nabu.json`.
 - **WM8960 goes silent after session** — hardware state resets; fixed by `wm8960-mixer-init.service` running at every boot.
 - **DotStar LEDs** — Voice Bonnet has 3 APA102 (DotStar) LEDs on GPIO 5/6, not NeoPixels. `lva_bonnet_leds.py` uses lgpio bit-bang — no spidev needed.
@@ -129,7 +129,7 @@ All run Debian 13 Trixie, PipeWire + WirePlumber. HA at `http://192.168.1.149:81
 - **`PULSE_RUNTIME_PATH`** must be `/run/user/1000/pulse` (not `/run/user/1000`) — both in `/etc/linux-voice-assistant.env` AND in the `Environment=` line of the system service file
 - **`LVA_MIC`** correct value: `alsa_input.platform-soc_sound.HiFi__Mic__source` (PipeWire UCM profile name, not `stereo-fallback`)
 - **`/run/user/1000/pulse/` ownership:** If this directory becomes owned by root (e.g. from running `pactl` as root), LVA fails with `AssertionError` in soundcard. Fix: `sudo chown pi:pi /run/user/1000/pulse/`
-- **GPIO 17 / WM8960 IRQ:** GPIO 17 is the physical button pin BUT the WM8960 codec also drives it low during audio activity. Do not use `when_pressed` — it causes false mute triggers on wake word. **Workaround implemented in `feature/gpio-button` branch:** `_button_watcher()` uses `RPi.GPIO` edge detection on both edges, measures pulse duration, and only calls `_toggle_mute()` if the pin stayed low for ≥ `BUTTON_THRESHOLD` seconds (default 200ms). WM8960 IRQ pulses are typically < 10ms. Needs live testing on VoicePi4 before merging to main.
+- **GPIO 17 / WM8960 IRQ:** GPIO 17 is the physical button pin BUT the WM8960 codec also drives it low during audio activity. Do not use `when_pressed` — it causes false mute triggers on wake word. **Workaround implemented in `feature/gpio-button` branch:** `_button_watcher()` uses `RPi.GPIO` edge detection on both edges, measures pulse duration, and only calls `_toggle_mute()` if the pin stayed low for ≥ `BUTTON_THRESHOLD` seconds (default 200ms). WM8960 IRQ pulses are typically < 10ms. Needs live testing on VoicePiBedroom before merging to main.
 
 ### GPIO button — WORKING (2026-04-03)
 
